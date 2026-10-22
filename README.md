@@ -75,4 +75,6 @@ npm run dist:mac    # macOS dmg（只能在 mac 上执行）
 
 取流层用 [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi)（已归档）。
 
-本仓库仅供个人学习与自用，不对第三方服务的可用性做任何保证。
+本项目仅供学习交流，不对第三方服务的可用性做任何保证。
+
+**关于账号**：取流走官方接口，需要使用者自己的登录态；项目**不包含**任何破解、绕过付费或下载功能。

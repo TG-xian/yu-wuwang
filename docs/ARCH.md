@@ -25,7 +25,7 @@
 | 采样率跟随、bit-perfect 通路 | ✅ |
 | 每日推荐 | M4 |
 | 我的音乐 / 我喜欢的 | M4 |
-| 本地音乐页（读 `OneDrive\Music` + 自选目录） | M3 |
+| 本地音乐页（系统音乐文件夹 + 自选目录） | M3 |
 | 全局媒体键（播放/暂停/上下曲） | M5 |
 | 真无损体检（只标记，不拦截） | M4 |
 
@@ -339,9 +339,9 @@ M1 不碰音频、不碰网络，纯链路验证。
 |---|---|---|
 | M1 骨架 | ✅ | `[engine] ready pid=… port=47800` + `[main] handshake ok` + WS ESTABLISHED |
 | M2 出声 | ✅ | 48 kHz FLAC → ASIO index 0 (Donner)，播放位置与墙钟同步、CPU 0%、播完释放；**用户人耳确认** |
-| M3 取流 | ✅ | 扫码登录（uid 385469936 / vipType 110）→ 搜索 278 条 → `level=lossless` 5/5 全 flac（**魔数 `fLaC` 验证**，CDN 的 `Content-Type: audio/mpeg` 是假 MIME）→ BASS 播网络流，源 24bit/44.1k，ASIO 由 48k 自动切 44.1k |
+| M3 取流 | ✅ | 扫码登录（读账号 uid / vipType 110）→ 搜索 278 条 → `level=lossless` 5/5 全 flac（**魔数 `fLaC` 验证**，CDN 的 `Content-Type: audio/mpeg` 是假 MIME）→ BASS 播网络流，源 24bit/44.1k，ASIO 由 48k 自动切 44.1k |
 | M4 界面 | ✅ 骨架 | `main.html` + `app.css` + `js/logo.js` + `js/app.js`；主页与播放页均经 headless 1280×800 截图验证 |
-| M5 打磨 | 🟡 进行中 | ✅ 歌词解析+跟随滚动（`parseLrc`）、✅ 主页真实推荐歌单（`/personalized`）、✅ 每日推荐页（`/recommend/songs`）、✅ 本地音乐页（主进程扫 `OneDrive\Music`，实测 55 个文件）<br>⬜ 全局媒体键、托盘、真无损体检、私人漫游 |
+| M5 打磨 | 🟡 进行中 | ✅ 歌词解析+跟随滚动（`parseLrc`）、✅ 主页真实推荐歌单（`/personalized`）、✅ 每日推荐页（`/recommend/songs`）、✅ 本地音乐页（主进程扫系统音乐文件夹，实测 55 个文件）<br>⬜ 全局媒体键、托盘、真无损体检、私人漫游 |
 | M6 Mac | ⬜ | 需真机 |
 
 ### M2 踩的四个坑（都已在代码注释里标明）
