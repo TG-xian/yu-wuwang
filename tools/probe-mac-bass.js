@@ -76,6 +76,8 @@ function tryInit(label, dev, freq, flags) {
 
 try { BASS_SetConfig(42, 0); } catch {}
 tryInit('默认设备（-1，无 HOG）', -1, 48000, 0);
+tryInit('共享 + 跟随采样率（-1，只带 FREQ，无 HOG，44.1k）', -1, 44100, 0x8000);
+tryInit('共享 + 跟随采样率（-1，只带 FREQ，无 HOG，96k）', -1, 96000, 0x8000);
 tryInit('默认设备（-1，HOG|FREQ，44.1k）', -1, 44100, 0x10000 | 0x8000);
 tryInit('设备 1（-，无 HOG）', 1, 48000, 0);
 tryInit('设备 1（HOG|FREQ，48k）', 1, 48000, 0x10000 | 0x8000);
