@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>豫 · 无妄 — M1 链路验证</title>
+<style>
+  :root{--gold:#C9A227;--gold-l:#E8C766;--gold-d:#8A6D1F;--line:#222226;}
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{margin:0;background:radial-gradient(760px 520px at 50% 34%,#131315,#0A0A0C 58%,#050506 100%);
+    color:#EDEDED;font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    display:flex;align-items:center;justify-content:center;}
+  .wrap{width:520px;}
+  .brand{display:flex;align-items:center;gap:22px;margin-bottom:34px;}
+  .brand svg{width:96px;height:96px;}
+  .brand .t{font-family:"Songti SC","SimSun",serif;font-size:52px;font-weight:700;letter-spacing:4px;line-height:1;}
+  .brand .p{margin-top:8px;font-family:Consolas,monospace;font-size:13px;letter-spacing:4px;color:#A8853A;}
+  .tag{font-size:10px;letter-spacing:3px;color:var(--gold-d);border:1px solid #2e2618;padding:5px 10px;display:inline-block;margin-bottom:18px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  td{padding:11px 0;border-bottom:1px solid var(--line);}
+  td:first-child{color:#6d6d72;width:130px;letter-spacing:.5px;}
+  td:last-child{font-family:Consolas,monospace;color:#c8c8cc;}
+  .ok{color:#6fd08a !important;}
+  .bad{color:#e07070 !important;}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#444;margin-right:8px;vertical-align:1px;}
+  .dot.on{background:#6fd08a;box-shadow:0 0 8px rgba(111,208,138,.7);}
+  .dot.err{background:#e07070;box-shadow:0 0 8px rgba(224,112,112,.7);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <svg viewBox="0 0 96 96" id="mark"></svg>
+    <div>
+      <div class="t">豫</div>
+      <div class="p">WÚ WÀNG</div>
+    </div>
+  </div>
+  <div class="tag">M1 · UI ↔ ENGINE 握手</div>
+  <table>
+    <tr><td>引擎进程</td><td id="s-proc"><span class="dot"></span>等待</td></tr>
+    <tr><td>WS 连接</td><td id="s-ws"><span class="dot"></span>等待</td></tr>
+    <tr><td>握手</td><td id="s-hs">—</td></tr>
+    <tr><td>往返延迟</td><td id="s-rtt">—</td></tr>
+    <tr><td>平台能力</td><td id="s-caps">—</td></tr>
+  </table>
+</div>
+
+<script>
+const G='#C9A227', GL='#E8C766', GD='#8A6D1F';
+const SEQ=[1,1,1,0,0,1,0,0,0];
+(function draw(){
+  const o={lw:4.4,gap:4,x0:20,Wd:56,GAP:10,y0:14};
+  let h=`<rect x="7.5" y="7.5" width="81" height="81" fill="none" stroke="${G}" stroke-width="3"/>`;
+  for(let i=0;i<9;i++){
+    const y=o.y0+i*(o.lw+o.gap), c=i<3?G:(i<6?GL:GD);
+    if(SEQ[i]===1) h+=`<rect x="${o.x0}" y="${y}" width="${o.Wd}" height="${o.lw}" rx=".9" fill="${c}"/>`;
+    else{const s=(o.Wd-o.GAP)/2;
+      h+=`<rect x="${o.x0}" y="${y}" width="${s}" height="${o.lw}" rx=".9" fill="${c}"/><rect x="${o.x0+s+o.GAP}" y="${y}" width="${s}" height="${o.lw}" rx=".9" fill="${c}"/>`;}
+  }
+  document.getElementById('mark').innerHTML=h;
+})();
+
+const $=(id)=>document.getElementById(id);
+function set(id, text, cls){
+  $(id).innerHTML = `<span class="dot ${cls||''}"></span>${text}`;
+}
+
+window.yw.onEngineStatus((p)=>{
+  if(p.state==='connected'){ set('s-ws','已连接','on'); set('s-proc','运行中','on'); }
+  if(p.state==='ready'){
+    set('s-hs', `ok · engine ${p.info.engine} v${p.info.version} · pid ${p.info.pid}`,'ok');
+    set('s-caps', `asio=${p.info.caps.asio} · native=${p.info.caps.native}`);
+  }
+  if(p.state==='pong'){ $('s-rtt').textContent = p.rtt + ' ms'; }
+});
+window.yw.onEngineFailed((p)=>{
+  set('s-hs','FAILED: '+p.reason,'bad');
+  set('s-ws','断开','err');
+});
+</script>
+</body>
+</html>

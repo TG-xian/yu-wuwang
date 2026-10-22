@@ -1,0 +1,46 @@
+# ── 登录态（绝对不能提交）──
+.cookie
+.qr-key
+*.cookie
+
+# ── 依赖与构建产物 ──
+node_modules/
+dist/
+out/
+
+# ── 运行日志 ──
+*.log
+run.log
+pack-run*.log
+installed-run.log
+
+# ── 开发时落在项目根的用户数据 ──
+library.json
+library-cache.json
+covers/
+settings.json
+
+# ── 测试临时产物 ──
+tools/*.png
+tools/test.m3u
+tools/_master.png
+
+# ── 登录二维码截图（一次性，且可能含登录态）──
+qr*.png
+qr-*.png
+
+# ── 调试截图与下载的原始包 ──
+shot*.png
+ui-*.png
+native/*.zip
+.test-*
+
+# ── 系统文件 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── 编辑器 ──
+.vscode/
+.idea/
+*.swp

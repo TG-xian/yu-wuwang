@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- V8 需要 JIT 与可执行内存，否则 Electron 起不来 -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+
+  <!-- 关键：libbass.dylib / libbassflac.dylib 是 un4seen 的预编译库，
+       没有我们的签名。不关掉库校验，加载会被 Gatekeeper 拦掉。 -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- 引擎与取流服务是子进程，需要能 fork/exec -->
+  <key>com.apple.security.inherit</key>
+  <true/>
+</dict>
+</plist>

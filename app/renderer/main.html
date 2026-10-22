@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https: file:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' http://127.0.0.1:3000 ws://127.0.0.1:47800">
+<title>豫 · 无妄</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 96 96" data-logo="std"></svg>
+      <div>
+        <div class="nm">豫</div>
+        <div class="sub">WÚ WÀNG</div>
+      </div>
+    </div>
+    <nav class="htabs" id="htabs">
+      <button data-view="home" class="on">发现</button>
+      <button data-view="search">搜索</button>
+      <button data-view="local">本地</button>
+    </nav>
+    <div class="grow"></div>
+    <input id="q" class="search-box" placeholder="搜索曲目、歌手、歌单" autocomplete="off">
+    <div class="huser" id="user">未登录</div>
+    <div class="win-ctrl">
+      <button class="wc" data-win="min" aria-label="最小化" title="最小化">
+        <svg viewBox="0 0 10 10"><rect x="2.2" y="4.55" width="5.6" height=".9" rx=".45" fill="currentColor"/></svg>
+      </button>
+      <button class="wc" data-win="max" aria-label="最大化" title="最大化">
+        <svg viewBox="0 0 10 10"><rect x="2.4" y="2.4" width="5.2" height="5.2" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>
+      </button>
+      <button class="wc wc-close" data-win="close" aria-label="关闭" title="关闭到托盘">
+        <svg viewBox="0 0 10 10"><path d="M2.9 2.9l4.2 4.2M7.1 2.9l-4.2 4.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <!-- 侧栏 -->
+    <nav class="sidebar" id="sidebar">
+      <div class="nav-g">在线</div>
+      <button class="nav-i on" data-view="home">发现音乐</button>
+      <button class="nav-i" data-view="daily">每日推荐</button>
+      <button class="nav-i" data-view="radio">私人漫游</button>
+      <div class="nav-sep"></div>
+      <div class="nav-g">我的</div>
+      <button class="nav-i" data-view="liked">我喜欢的音乐</button>
+      <button class="nav-i" data-view="recent">最近播放</button>
+      <div class="nav-sep"></div>
+      <div class="nav-g">我的歌单</div>
+      <div class="side-pls" id="side-pls"></div>
+      <div class="nav-sep"></div>
+      <div class="nav-g">本地</div>
+      <button class="nav-i" data-view="local">本地音乐</button>
+    </nav>
+
+    <!-- 主区 -->
+    <main class="content" id="content">
+      <!-- 发现 -->
+      <section class="view on" data-page="home">
+        <div class="home-head">
+          <div>
+            <div class="page-t">发<em>·</em>现</div>
+            <div class="page-sub" id="home-date">DISCOVER</div>
+          </div>
+          <button class="refresh-btn" id="home-refresh" aria-label="刷新推荐">
+            <svg viewBox="0 0 24 24">
+              <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/>
+              <path d="M20.5 4.5v5.2h-5.2"/>
+            </svg>
+          </button>
+        </div>
+        <div class="daily" id="daily-card">
+          <div class="daily-l"><div class="daily-n" id="daily-n">30</div><small>TRACKS</small></div>
+          <div>
+            <div class="daily-h">每日推荐</div>
+            <div class="daily-s">根据你最近的收听生成 · 只取 SQ 无损</div>
+          </div>
+          <div class="daily-go">PLAY →</div>
+        </div>
+        <div class="sec">推荐歌单</div>
+        <div class="pl-grid" id="pl-grid"></div>
+        <div class="sec" style="margin-top:26px;">排行榜</div>
+        <div class="rank" id="rank"></div>
+      </section>
+
+      <!-- 搜索 -->
+      <section class="view" data-page="search">
+        <div class="page-t" style="font-size:26px;">搜<em>·</em>索</div>
+        <div class="page-sub" id="search-sub">输入关键词后回车</div>
+        <div class="search-tabs" id="search-tabs">
+          <button data-tab="songs" class="on">单曲</button>
+          <button data-tab="artists">歌手</button>
+          <button data-tab="albums">专辑</button>
+          <button data-tab="playlists">歌单</button>
+        </div>
+        <div id="search-list"><div class="empty">搜索曲目、歌手、专辑、歌单</div></div>
+      </section>
+
+      <!-- 歌单 / 本地 占位 -->
+      <section class="view" data-page="list">
+        <button class="back-btn" id="list-back" aria-label="返回">
+          <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg><span>返回</span>
+        </button>
+        <div class="page-t" id="list-title" style="font-size:26px;">歌单</div>
+        <div class="page-sub" id="list-sub"></div>
+        <div class="local-bar" id="local-bar" hidden>
+          <div class="lb-dirs" id="lb-dirs"></div>
+          <div class="lb-acts">
+            <button class="lb-btn" id="lb-add">+ 添加文件夹</button>
+            <button class="lb-btn lb-ghost" id="lb-rescan">重新扫描</button>
+          </div>
+        </div>
+        <div class="local-pls" id="local-pls" hidden></div>
+        <div id="list-body"><div class="empty">M3 接入取流后填充</div></div>
+      </section>
+    </main>
+
+    <!-- 播放页 -->
+    <section class="player-view" id="player-view">
+      <div class="pl-top">
+        <button class="pl-back" id="pl-back" aria-label="收起播放页">↓</button>
+        <div class="pl-brand">
+          <svg class="mark" viewBox="0 0 96 96" data-logo="std"></svg>
+          <div>
+            <div class="t">豫</div>
+            <div class="sub">WÚ WÀNG</div>
+          </div>
+        </div>
+        <div class="pl-tag" id="pl-tag">—</div>
+        <div class="grow"></div>
+        <div class="led" id="pl-led"></div>
+        <div class="led-l" id="pl-led-l">输出未就绪</div>
+        <div class="win-ctrl pl-win">
+          <button class="wc" data-win="min" aria-label="最小化" title="最小化">
+            <svg viewBox="0 0 10 10"><rect x="2.2" y="4.55" width="5.6" height=".9" rx=".45" fill="currentColor"/></svg>
+          </button>
+          <button class="wc" data-win="max" aria-label="最大化" title="最大化">
+            <svg viewBox="0 0 10 10"><rect x="2.4" y="2.4" width="5.2" height="5.2" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>
+          </button>
+          <button class="wc wc-close" data-win="close" aria-label="关闭" title="关闭到托盘">
+            <svg viewBox="0 0 10 10"><path d="M2.9 2.9l4.2 4.2M7.1 2.9l-4.2 4.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="pl-main">
+        <div class="deck">
+          <div class="plinth">
+            <div class="emboss"><svg viewBox="0 0 96 96" data-logo="std"></svg></div>
+          </div>
+          <div class="disc-wrap" id="disc-wrap"><div class="disc" id="disc"><div class="label" id="label"><img id="pl-cover" alt="" hidden><span class="spin-ring"></span></div></div></div>
+          <div class="arm off" id="arm">
+            <div class="weight"></div>
+            <div class="pivot"></div>
+            <div class="rod"></div>
+            <div class="head"></div>
+          </div>
+        </div>
+        <div class="pl-info">
+          <svg class="wmark" viewBox="0 0 96 96" data-logo="plain"></svg>
+          <div class="pl-h1" id="pl-title">未在播放</div>
+          <div class="pl-h2" id="pl-meta"><span class="yr">选择一首歌开始</span></div>
+          <div class="pl-rule"></div>
+          <div class="lyr" id="pl-lyric"><div>—</div></div>
+          <div class="pl-status"><span class="led" id="pl-status-led"></span><span id="pl-status-txt">AUDIO ENGINE IDLE</span></div>
+        </div>
+      </div>
+
+      <div class="pl-bottom">
+        <button class="ctrl-round" id="pl-list" aria-label="播放列表"><svg viewBox="0 0 24 24"><path d="M3 6.5h11v1.8H3zM3 11.1h11v1.8H3zM3 15.7h7v1.8H3z"/><path d="M17.2 8.6 22.4 12l-5.2 3.4z"/></svg></button>
+        <button class="ctrl-round" id="pl-prev" aria-label="上一曲">
+          <svg viewBox="0 0 24 24"><path d="M6 5h2.2v14H6zM20 5v14L9.2 12z"/></svg>
+        </button>
+        <button class="btn-round" id="pl-play" aria-label="播放">
+          <svg viewBox="0 0 24 24" id="pl-play-icon"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button class="ctrl-round" id="pl-next" aria-label="下一曲">
+          <svg viewBox="0 0 24 24"><path d="M15.8 5H18v14h-2.2zM4 5v14l10.8-7z"/></svg>
+        </button>
+        <div class="pl-prog">
+          <span class="tcode" id="pl-pos">0:00</span>
+          <div class="groove" id="pl-groove"><i></i></div>
+          <span class="tcode" id="pl-dur">0:00</span>
+        </div>
+        <div class="flip-like" id="like-switch" title="上拨 = 喜欢">
+          <div class="fl-bezel"></div>
+          <div class="fl-hole"></div>
+          <div class="fl-lever"></div>
+        </div>
+        <button class="mode-btn" id="pl-mode" title="播放模式：列表循环">
+          <svg viewBox="0 0 24 24" id="pl-mode-icon"></svg>
+        </button>
+        <button class="out-sel" id="pl-output">ASIO · Donner ▾</button>
+      </div>
+
+      <div class="out-menu" id="out-menu" hidden>
+        <div class="out-item on" data-mode="asio" data-dev="0" data-label="ASIO · Donner USB Audio Device">ASIO 独占 · Donner</div>
+        <div class="out-item" data-mode="asio" data-dev="1" data-label="ASIO · Realtek ASIO">ASIO 独占 · Realtek</div>
+        <div class="out-sep"></div>
+        <div class="out-item" data-mode="wasapi" data-dev="2" data-label="WASAPI · Livejack">WASAPI 共享 · Livejack</div>
+        <div class="out-item" data-mode="wasapi" data-dev="3" data-label="WASAPI · Realtek">WASAPI 共享 · Realtek</div>
+        <div class="out-sep"></div>
+        <div class="out-note">切换后下一次开始播放时生效</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 底部播放条 -->
+  <footer class="playbar">
+    <div class="pb-cover" id="pb-cover"></div>
+    <div>
+      <div class="pb-t" id="pb-t">未在播放</div>
+      <div class="pb-a" id="pb-a">—</div>
+    </div>
+    <div class="pb-ctrl">
+      <button class="pb-btn" id="pb-list" aria-label="播放列表"><svg viewBox="0 0 24 24"><path d="M3 6.5h11v1.8H3zM3 11.1h11v1.8H3zM3 15.7h7v1.8H3z"/><path d="M17.2 8.6 22.4 12l-5.2 3.4z"/></svg></button>
+      <button class="pb-btn" id="pb-prev" aria-label="上一曲">
+        <svg viewBox="0 0 24 24"><path d="M6 5h2.2v14H6zM20 5v14L9.2 12z"/></svg>
+      </button>
+      <button class="pb-btn pb-main" id="pb-play" aria-label="播放">
+        <svg viewBox="0 0 24 24" id="pb-play-icon"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+      <button class="pb-btn" id="pb-next" aria-label="下一曲">
+        <svg viewBox="0 0 24 24"><path d="M15.8 5H18v14h-2.2zM4 5v14l10.8-7z"/></svg>
+      </button>
+    </div>
+    <div class="pb-bar" id="pb-bar"><i></i></div>
+    <span class="tcode" id="pb-time">0:00 / 0:00</span>
+    <span class="pb-q" id="pb-q">SQ</span>
+  </footer>
+</div>
+
+<!-- 开机画面：应用就绪后淡出 -->
+<div class="splash-screen" id="splash">
+  <div class="sp-noise"></div>
+  <div class="sp-tl">YÙ · WÚ WÀNG</div>
+  <div class="sp-center">
+    <div class="sp-brand">
+      <svg class="sp-mark" viewBox="0 0 96 96" data-logo="std"></svg>
+      <div class="sp-txt">
+        <div class="sp-name">豫</div>
+        <div class="sp-pinyin">WÚ WÀNG</div>
+      </div>
+    </div>
+    <div class="sp-words">雷出地奋　不妄其声</div>
+    <div class="sp-bar"><i></i></div>
+  </div>
+  <div class="sp-ver">v0.1.0</div>
+</div>
+
+<div class="drop-hint" id="drop-hint" hidden><span>松手即加入音乐库</span></div>
+
+<!-- 扫码登录 -->
+<div class="qr-modal" id="qr-modal" hidden>
+  <div class="qr-box">
+    <button class="qr-close" id="qr-close" aria-label="关闭">×</button>
+    <div class="qr-t">扫码登录网易云</div>
+    <div class="qr-img" id="qr-img"><div class="qr-ph">加载中…</div></div>
+    <div class="qr-s" id="qr-s">正在获取二维码…</div>
+    <div class="qr-hint">用「网易云音乐」App 扫码并确认</div>
+  </div>
+</div>
+
+<div class="queue-panel" id="queue-panel">
+  <div class="qp-head">
+    <button class="qp-tab on" data-qt="queue">当前播放</button>
+    <button class="qp-tab" data-qt="recent">最近播放</button>
+    <span class="qp-count" id="qp-count">0 首</span>
+    <button class="qp-close" id="qp-close" aria-label="关闭">×</button>
+  </div>
+  <div class="qp-body" id="qp-body"></div>
+</div>
+
+<script src="js/logo.js"></script>
+<script src="js/api.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
