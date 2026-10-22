@@ -102,6 +102,31 @@ git tag v0.1.1 && git push origin v0.1.1     # tag 自动触发打包 + 创建 R
 - 退出：`before-quit` 发 `shutdown`（引擎 `BASS_Free` 释放 hog），`will-quit` 强杀兜底孤儿进程
 - 打包只出 arm64 单包
 
+### CI 真机上已经验证过的（2026-10-23，macos-14 arm64 / macOS 14.8.9）
+
+`tools/probe-mac-bass.js` + `.github/workflows/mac-probe.yml` 在**真实 darwin** 上跑过一次，实测输出：
+
+```
+koffi.load(libbass.dylib) = OK           ← 打包进包 ≠ 运行时可加载，这条最关键
+sizeof(BASS_DEVICEINFO) = 24             ← 结构体布局与 Windows 一致
+dev=0 name="No sound" flags=0x1          ← 印证「设备 0 = 无声设备」
+dev=1 name="Default" flags=0x3 [default]
+dev=2 name="Apple Virtual Sound Device" flags=0x3 [default]
+dev=3 name="Null Audio Device" flags=0x2000001
+BASS_Init(-1, 48000, 0) = OK             ← -1 = 系统默认设备，成立
+BASS_Init(-1, 44100, HOG|FREQ) = OK      ← HOG+FREQ 被接受（虚拟设备上）
+BASS_Init(1, 48000, HOG|FREQ) = OK
+```
+
+所以「dylib 能加载 / 设备能枚举 / -1 能当默认设备」三条已从「理论」变成「实测」。
+
+由这次实测顺带修的两处：
+
+- runner 上 dev1 与 dev2 都带 default 位 → `listDevices()` 只保留第一台的「· 默认」标记
+- 占位设备名（`Default` / `Null` / `Virtual`）加进外接声卡提示的排除规则，避免误弹「检测到 Default，要切到独占吗？」
+
+**仍未覆盖**：真实 USB DAC 上的 HOG 成败、系统是否真被独占、拔插、退出释放、UI 渲染与 toast 观感。
+
 ### 仍未验证（必须真机）
 
 以上只做了静态检查 + Windows 回归，**mac 一行都没在真机跑过**。按顺序验：

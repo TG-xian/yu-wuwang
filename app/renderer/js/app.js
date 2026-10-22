@@ -1839,8 +1839,10 @@ function maybeHintExternalDac() {
   state.dacHintChecked = true;
   if (outMode !== 'shared') return;                       // 已经在独占，不打扰
 
-  // 内置扬声器 / 蓝牙（独占对蓝牙必失败）都不提示
-  const SKIP = /Built-in|内置|Internal|MacBook|AirPods|Bluetooth|蓝牙/i;
+  // 内置扬声器 / 蓝牙（独占对蓝牙必失败）/ 占位设备都不提示
+  // 占位名来自 CI 实测（macos-14 runner）：dev1 = "Default"、dev3 = "Null Audio Device"、
+  // "Apple Virtual Sound Device" —— 真机上也可能出现同名虚拟设备，不能当成外接声卡。
+  const SKIP = /Built-in|内置|Internal|MacBook|AirPods|Bluetooth|蓝牙|\bDefault\b|Null|Virtual|虚拟/i;
   const defIdx = (macDevices.find((d) => d.isDefault) || {}).index;
   // 不能排除「当前系统默认设备」：macOS 插上 USB DAC 后通常会自动把它设为默认，
   // 此时我们正以共享模式输出到这台 DAC —— 恰恰是最该提示切独占的时刻。

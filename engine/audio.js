@@ -229,6 +229,10 @@ class AudioEngine {
     // 个别 CoreAudio 驱动不置 BASS_DEVICE_DEFAULT：退一步把第一台可用设备当默认，
     // 否则 UI 上没有任何设备带「· 默认」标记。只影响显示，不改变实际输出设备选择。
     if (out.length && !out.some((d) => d.isDefault)) out[0].isDefault = true;
+    // 实测（CI macos-14 arm64）：CoreAudio 上有两台设备同时带 default 位，
+    // 只保留第一台的标记，否则菜单里会出现两个「· 默认」。
+    const firstDef = out.findIndex((d) => d.isDefault);
+    out.forEach((d, i) => { if (i !== firstDef) d.isDefault = false; });
     console.log(`[audio] [mac] listDevices ${out.length} 台:` +
       (out.length ? ' ' + out.map((d) => `${d.index}:"${d.name}"${d.isDefault ? '(默认)' : ''}`).join(' | ') : ' （无）'));
     return out;
