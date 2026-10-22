@@ -1,6 +1,6 @@
 {
   "name": "yu-wuwang",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "豫 · 无妄 — 网易云桌面播放器（真无损 / ASIO 独占）",
   "main": "app/main.js",
   "author": "tianz",
@@ -66,8 +66,7 @@
         {
           "target": "dmg",
           "arch": [
-            "arm64",
-            "x64"
+            "arm64"
           ]
         }
       ],

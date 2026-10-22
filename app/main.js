@@ -184,6 +184,11 @@ function createTray(win) {
     return;
   }
 
+  // macOS 菜单栏图标必须是「模板图」：Electron 只取 alpha 通道当蒙版，
+  // 不设的话彩色图标会在深色菜单栏里变成一块灰/彩色方块。
+  // （Windows 托盘用原色 .ico，这里保持不动。）
+  if (process.platform === 'darwin') img.setTemplateImage(true);
+
   tray = new Tray(img);
   tray.setToolTip('豫 · 无妄');
 
@@ -275,11 +280,25 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   shuttingDown = true;
   stopApiServer();
+  // 通知引擎退出：引擎收到 shutdown 会 engine.shutdown() → BASS_Free()，
+  // mac 上 BASS_Free 才会释放 CoreAudio hog（否则退出后整机可能一直没声音）。
   try { engineWs && engineWs.send(JSON.stringify({ cmd: 'shutdown' })); } catch {}
+  console.log('[quit] 已向引擎发送 shutdown（释放独占设备）');
   // 给引擎 500ms 释放设备，再强杀
   setTimeout(() => {
     if (engineProc && !engineProc.killed) { try { engineProc.kill(); } catch {} }
   }, 500);
+});
+
+app.on('will-quit', () => {
+  // 兜底：退出时的 500ms 定时器经常来不及跑完进程就没了，
+  // 子进程一旦变成孤儿会一直占着独占设备（mac 上 hog 不放 = 整机没声音）。
+  // 进程被系统回收时 CoreAudio/WASAPI 会自动释放设备，所以这里同步补一刀。
+  shuttingDown = true;
+  if (engineProc && !engineProc.killed) {
+    console.log('[quit] 兜底：强杀引擎进程，确保独占设备释放');
+    try { engineProc.kill(); } catch {}
+  }
 });
 
 // 本地音乐扫描（渲染进程无 fs 权限，由主进程代劳）

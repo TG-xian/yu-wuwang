@@ -24,6 +24,9 @@ const F = {
   BASS_DEVICE_HOG: 0x10000,
   // 让设备切到指定采样率（配合 HOG 用：设备跟随流，而不是流被重采样）
   BASS_DEVICE_FREQ: 0x8000,
+  // BASS_DEVICEINFO.flags 位（仅 macOS 枚举用）
+  BASS_DEVICE_ENABLED: 0x1,   // 设备可用（0 = 已禁用 / 已拔出）
+  BASS_DEVICE_DEFAULT: 0x2,   // 该设备是系统默认设备
   BASS_SAMPLE_FLOAT: 0x100,
   BASS_UNICODE: 0x80000000,
   BASS_ASIO_THREAD: 1,
@@ -31,6 +34,25 @@ const F = {
   BASS_ASIO_FORMAT_24BIT: 17,
   BASS_ASIO_FORMAT_32BIT: 18
 };
+
+/**
+ * BASS_DEVICEINFO（bass.h）——只用于 macOS 设备枚举。
+ *
+ * 64 位平台字节布局（sizeof = 24，alignof = 8，已用 koffi.sizeof 实测确认）：
+ *   偏移 0  : char  *name    设备名（8 字节指针）
+ *   偏移 8  : char  *driver  驱动名（8 字节指针，CoreAudio 上多为空串）
+ *   偏移 16 : uint32 flags   （4 字节）
+ *   偏移 20 : padding        （4 字节，结构按 8 字节对齐）
+ *
+ * 用 koffi.struct 让 koffi 自己按 char* 解出 JS 字符串；
+ * 出参用空对象，koffi 会把 name/driver/flags 填回这个对象。
+ */
+const BASS_DEVICEINFO = koffi.struct('BASS_DEVICEINFO', {
+  name: 'const char *',
+  driver: 'const char *',
+  flags: 'uint32'
+});
+
 
 class AudioEngine {
   constructor(opts = {}) {
@@ -41,10 +63,15 @@ class AudioEngine {
     this.chan = 0;
     this.info = null;       // { freq, chans, bits, dur }
     this.state = 'idle';    // idle | loading | ready | playing | paused | error
-    this.outputMode = 'asio';   // asio | wasapi | hog（macOS 独占）
+    // asio | wasapi（Windows） | exclusive | shared | hog（macOS，hog 为 exclusive 的旧名）
+    this.outputMode = 'asio';
     this.wasapiDev = null;
-    this.hogDev = null;         // macOS：当前独占的设备
+    this.hogDev = null;         // macOS：当前独占的设备（-1 = 系统默认设备）
     this.hogRate = 0;           // macOS：当前独占的采样率
+    this.hogName = '';          // macOS：独占设备名（只用于日志/诊断）
+    this.sharedDev = null;      // macOS：当前共享输出的设备（-1 = 系统默认设备）
+    this.sharedName = '';       // macOS：共享设备名
+    this.degraded = false;      // macOS：本次输出是不是独占失败后回落来的
     this.volume = 1.0;      // 0..1，走 ASIO 通道增益，不动 BASS_ATTRIB_VOL
     this.lastError = '';
     this._loadFns();
@@ -74,6 +101,8 @@ class AudioEngine {
     this.BASS_ChannelPlay = b.func('int BASS_ChannelPlay(uint32 handle, int restart)');
     this.BASS_ChannelPause = b.func('int BASS_ChannelPause(uint32 handle)');
     this.BASS_ChannelSetDevice = b.func('int BASS_ChannelSetDevice(uint32 handle, uint32 device)');
+    // 设备枚举（只有 macOS 的 listDevices 会调用；Windows 不枚举，保持现有设备路径不变）
+    this.BASS_GetDeviceInfo = b.func('int BASS_GetDeviceInfo(uint32 device, _Out_ BASS_DEVICEINFO *info)');
 
     const a = this.asio;
     if (a) {
@@ -94,8 +123,11 @@ class AudioEngine {
   _ensureBass() {
     if (this.bassReady) return;
     this.BASS_SetConfig(42, 1); // BASS_CONFIG_UNICODE
-    if (!this.BASS_Init(0, 48000, 0, null, null)) {
-      throw new Error(`BASS_Init 失败 err=${this.BASS_ErrorGetCode()}`);
+    // macOS：-1 = 系统默认设备。BASS 的设备 0 是「No sound」虚拟设备，
+    // 在老代码里传 0 就是 mac 装上没声音的根因（Windows 的 0 语义不同，保持不动）。
+    const initDev = IS_WIN ? 0 : -1;
+    if (!this.BASS_Init(initDev, 48000, 0, null, null)) {
+      throw new Error(`BASS_Init(dev=${initDev}) 失败 err=${this.BASS_ErrorGetCode()}`);
     }
     const flac = path.join(NATIVE, `${LIBP}bassflac${DLL}`);
     if (fs.existsSync(flac) && !this.BASS_PluginLoad(flac, 0)) {
@@ -154,12 +186,205 @@ class AudioEngine {
     };
   }
 
-  /** 加载并准备播放（不自动起播）。mode: 'asio'（默认，独占）| 'wasapi'（共享） */
+  /* ────────────────────────────────────────────────────────────────
+     macOS 专有：设备枚举 + 共享/独占两种输出。
+     Windows 不进入这些函数（调用点全部在 !IS_WIN 分支里）。
+     ──────────────────────────────────────────────────────────────── */
+
+  /**
+   * 枚举输出设备（仅 macOS）。
+   * BASS 的 device 0 是「No sound」，所以从 1 开始问，一直问到 GetDeviceInfo 返回 0。
+   * 过滤 flags 不含 0x1（disabled）的设备。
+   * Windows 返回 []（渲染层按平台判断；不实现 Windows 枚举，避免碰已实测的设备路径）。
+   */
+  listDevices() {
+    if (IS_WIN) return [];
+    const out = [];
+    // 枚举期间关掉 BASS_UNICODE，让 BASS 返回 UTF-8 设备名，
+    // 正好对上 koffi 的 char* → JS 字符串（UTF-8）解码。
+    // BASS_SetConfig 返回的是「旧值」，枚举完原样恢复。
+    let prev = 0;
+    try { prev = this.BASS_SetConfig(42, 0); } catch { prev = 0; }
+    try {
+      for (let i = 1; i <= 64; i++) {
+        const o = {};
+        let ok = 0;
+        try { ok = this.BASS_GetDeviceInfo(i, o); } catch { break; }
+        if (!ok) break;                                   // 没有更多设备了
+        const flags = (o.flags || 0) >>> 0;
+        if (!(flags & F.BASS_DEVICE_ENABLED)) {           // 0x1 = enabled
+          console.log(`[audio] [mac] 跳过未启用设备 dev=${i} name="${o.name || ''}" flags=0x${flags.toString(16)}`);
+          continue;
+        }
+        out.push({
+          index: i,
+          name: o.name || `设备 ${i}`,
+          driver: o.driver || '',
+          isDefault: !!(flags & F.BASS_DEVICE_DEFAULT)    // 0x2 = default
+        });
+      }
+    } finally {
+      try { this.BASS_SetConfig(42, prev); } catch {}
+    }
+    // 个别 CoreAudio 驱动不置 BASS_DEVICE_DEFAULT：退一步把第一台可用设备当默认，
+    // 否则 UI 上没有任何设备带「· 默认」标记。只影响显示，不改变实际输出设备选择。
+    if (out.length && !out.some((d) => d.isDefault)) out[0].isDefault = true;
+    console.log(`[audio] [mac] listDevices ${out.length} 台:` +
+      (out.length ? ' ' + out.map((d) => `${d.index}:"${d.name}"${d.isDefault ? '(默认)' : ''}`).join(' | ') : ' （无）'));
+    return out;
+  }
+
+  /**
+   * 渲染层传来的 outDevice → BASS 设备号。
+   * 'default' / undefined / 非法值 / 0 一律变成 -1（BASS 惯用法 = 系统默认设备）。
+   * 0 必须拦下：BASS 里 0 是「No sound」虚拟设备，mac 上传 0 = 静音。
+   */
+  _resolveMacDevice(deviceIndex) {
+    if (deviceIndex === undefined || deviceIndex === null) return -1;
+    if (typeof deviceIndex === 'string' && deviceIndex.trim().toLowerCase() === 'default') return -1;
+    const n = Number(deviceIndex);
+    if (!Number.isFinite(n) || n < 1) return -1;   // 含 0、负数、NaN
+    return Math.trunc(n);
+  }
+
+  /** 设备名（仅日志/诊断用；-1 时取默认设备的名字） */
+  _devName(dev) {
+    if (IS_WIN) return '';
+    try {
+      const n = Number(dev);
+      if (Number.isFinite(n) && n >= 1) {
+        const o = {};
+        if (this.BASS_GetDeviceInfo(n, o)) return o.name || '';
+      }
+      const list = this.listDevices();
+      const d = list.find((x) => x.isDefault) || list[0];
+      return d ? d.name : '(系统默认设备)';
+    } catch { return ''; }
+  }
+
+  /**
+   * macOS 共享输出：BASS_Init 不带 BASS_DEVICE_HOG，走 CoreAudio 系统混音器。
+   * 设备被系统共享，任何设备都能出声（代价：非 bit-perfect，采样率由系统定）。
+   * dev 必须是已解析好的设备索引（-1 = 系统默认设备），调用前不要传 0。
+   */
+  _macSharedLoad(source, dev, extra = {}) {
+    const label = extra.degraded ? 'shared(降级回落)' : 'shared';
+    // 设备/模式没变就不重开设备（重开会有一下静默）
+    const needReinit = !(
+      this.outputMode === 'shared' && this.bassReady && this.sharedDev === dev
+    );
+
+    if (needReinit) {
+      if (this.chan) { try { this.BASS_StreamFree(this.chan); } catch {} this.chan = 0; }
+      this._reinitBass(dev, 48000, 0);          // 无 HOG、无 FREQ：交给系统混音
+      this.outputMode = 'shared';
+      this.sharedDev = dev;
+      this.sharedName = this._devName(dev);
+      this.hogDev = null;
+      this.hogRate = 0;
+      this.hogName = '';
+      this.degraded = !!extra.degraded;
+      console.log(`[audio] [mac] ${label} 设备已打开 dev=${dev} name="${this.sharedName}" (48000Hz, 无 HOG)`);
+    } else if (this.chan) {
+      try { this.BASS_StreamFree(this.chan); } catch {}
+      this.chan = 0;
+    }
+
+    const chan = this._createStream(source, false);   // 普通播放流，BASS 自己送设备
+    if (!chan) throw new Error(`建流失败 err=${this.BASS_ErrorGetCode()}（URL 失效或无权限？）`);
+    this.chan = chan;
+
+    const info = this._readInfo(chan);
+    if (!info) throw new Error(`读流信息失败 err=${this.BASS_ErrorGetCode()}`);
+    this.info = info;
+
+    if (!this.BASS_ChannelPlay(chan, 1)) {
+      throw new Error(`共享播放失败 dev=${dev} err=${this.BASS_ErrorGetCode()}`);
+    }
+    this.state = 'ready';
+    console.log(`[audio] [mac] ${label} ready ${info.freq}Hz/${info.chans}ch dev=${dev} ` +
+      `name="${this.sharedName}" degraded=${this.degraded}${extra.reason ? ` reason=${extra.reason}` : ''}`);
+    return {
+      ok: true, info, mode: 'shared', device: dev, deviceName: this.sharedName,
+      degraded: this.degraded, reason: extra.reason || null,
+      note: 'CoreAudio 共享：经系统混音，非 bit-perfect'
+    };
+  }
+
+  /**
+   * macOS 独占输出：BASS_DEVICE_HOG（设备从系统混音器里摘出来）+ BASS_DEVICE_FREQ
+   * （让设备切到流采样率，而不是让流被重采样）。失败由 load() 捕获后回落共享。
+   */
+  _macExclusiveLoad(source, deviceIndex) {
+    const dev = this._resolveMacDevice(deviceIndex);
+    this._ensureBass();
+
+    // 先建流，只为了读出源采样率（设备速率得跟着它走）
+    let chan = this._createStream(source, false);
+    if (!chan) throw new Error(`建流失败 err=${this.BASS_ErrorGetCode()}（URL 失效或无权限？）`);
+    const probe = this._readInfo(chan);
+    if (!probe) {
+      try { this.BASS_StreamFree(chan); } catch {}
+      throw new Error(`读流信息失败 err=${this.BASS_ErrorGetCode()}`);
+    }
+
+    const wantRate = probe.freq;
+    const needReinit = !(
+      (this.outputMode === 'exclusive' || this.outputMode === 'hog') && this.bassReady &&
+      this.hogDev === dev && this.hogRate === wantRate
+    );
+
+    if (needReinit) {
+      try { this.BASS_StreamFree(chan); } catch {}
+      if (this.chan) { try { this.BASS_StreamFree(this.chan); } catch {} this.chan = 0; }
+      // 这一步是独占成败的关键：HOG 被别的进程占用、设备不支持该速率都会抛
+      this._reinitBass(dev, wantRate, F.BASS_DEVICE_HOG | F.BASS_DEVICE_FREQ);
+      this.outputMode = 'exclusive';
+      this.hogDev = dev;
+      this.hogRate = wantRate;
+      this.hogName = this._devName(dev);
+      this.sharedDev = null;
+      this.sharedName = '';
+      this.degraded = false;
+      console.log(`[audio] [mac] exclusive 设备已独占 dev=${dev} name="${this.hogName}" hogRate=${wantRate}Hz`);
+      chan = this._createStream(source, false);
+      if (!chan) throw new Error(`重建流失败 err=${this.BASS_ErrorGetCode()}`);
+    } else if (this.chan) {
+      try { this.BASS_StreamFree(this.chan); } catch {}
+    }
+
+    this.chan = chan;
+    const info = this._readInfo(chan) || probe;
+    this.info = info;
+
+    if (!this.BASS_ChannelPlay(chan, 1)) {
+      throw new Error(`独占播放失败 dev=${dev} err=${this.BASS_ErrorGetCode()}`);
+    }
+    this.state = 'ready';
+    const bp = Math.abs(wantRate - info.freq) < 1;
+    console.log(`[audio] [mac] exclusive ready ${info.freq}Hz/${info.chans}ch dev=${dev} ` +
+      `name="${this.hogName}" hogRate=${wantRate}Hz bitperfect=${bp}`);
+    return {
+      ok: true, info, deviceRate: wantRate, mode: 'exclusive', device: dev,
+      deviceName: this.hogName, bitperfect: bp, degraded: false
+    };
+  }
+
+  /** 加载并准备播放（不自动起播）。
+   *  mode: 'exclusive' 独占（默认；老名字 'asio'/'hog' 等价）
+   *        'shared'    共享（老名字 'wasapi' 等价）
+   */
   load(source, { deviceIndex, mode = 'asio' } = {}) {
     this.state = 'loading';
     try {
+      // 模式别名（新旧名字都要能用）：
+      //   shared    = 'wasapi'  → Windows: WASAPI 共享   / macOS: CoreAudio 共享（系统混音）
+      //   exclusive = 'asio' | 'hog' → Windows: ASIO 独占 / macOS: CoreAudio HOG 独占
+      // 注意：未知 mode 仍按独占走（与改动前一致）。
+      const wantShared = mode === 'wasapi' || mode === 'shared';
+
       // ── WASAPI 共享 ──
-      if (mode === 'wasapi') {
+      if (wantShared && IS_WIN) {
         const dev = deviceIndex ?? 1;
         if (!(this.outputMode === 'wasapi' && this.wasapiDev === dev && this.bassReady)) {
           this._reinitBass(dev, 48000);
@@ -189,58 +414,33 @@ class AudioEngine {
                  note: 'WASAPI 共享：经系统混音，非 bit-perfect' };
       }
 
-      // ── macOS：CoreAudio hog 独占 ──
-      // ASIO 是 Steinberg 为 Windows 定的，mac 上没有。BASS 在 mac 用
-      // BASS_DEVICE_HOG 走 CoreAudio 的 hog mode：设备被本应用独占，
-      // 系统混音器被踢出链路，样本直送 DAC。
-      // 采样率匹配靠 BASS_DEVICE_FREQ —— 让「设备」切到流的速率，
-      // 而不是让「流」被重采样，这两件事在 bit-perfect 上是相反的。
+      // ── macOS：CoreAudio 共享 / 独占 ──
+      // ASIO 是 Steinberg 为 Windows 定的，mac 上没有输出插件。BASS 在 mac 走 CoreAudio：
+      //   shared    = 不带宽 BASS_DEVICE_HOG，经系统混音器 → 任何设备都能出声（默认档）
+      //   exclusive = HOG 独占 + BASS_DEVICE_FREQ 跟随源采样率 → 不被系统混音，逼近 bit-perfect
+      // 设备号：0 在 BASS 里是「No sound」虚拟设备，mac 上绝不能传（会静音）；
+      // 「系统默认设备」用 -1 传 BASS_Init。
       if (!IS_WIN) {
-        this._ensureBass();
-
-        // 先建流，只为了读出源采样率（设备速率得跟着它走）
-        let chan = this._createStream(source, false);
-        if (!chan) throw new Error(`建流失败 err=${this.BASS_ErrorGetCode()}（URL 失效或无权限？）`);
-        const probe = this._readInfo(chan);
-        if (!probe) {
-          try { this.BASS_StreamFree(chan); } catch {}
-          throw new Error(`读流信息失败 err=${this.BASS_ErrorGetCode()}`);
+        if (wantShared) {
+          return this._macSharedLoad(source, this._resolveMacDevice(deviceIndex));
         }
 
-        const dev = deviceIndex ?? this.deviceIndex;
-        const wantRate = probe.freq;
-
-        // 设备/速率都没变就不重开设备（重开会有一下静默）
-        const needReinit = !(
-          this.outputMode === 'hog' && this.bassReady &&
-          this.hogDev === dev && this.hogRate === wantRate
-        );
-
-        if (needReinit) {
-          try { this.BASS_StreamFree(chan); } catch {}
-          if (this.chan) { try { this.BASS_StreamFree(this.chan); } catch {} this.chan = 0; }
-
-          this._reinitBass(dev, wantRate, F.BASS_DEVICE_HOG | F.BASS_DEVICE_FREQ);
-          this.outputMode = 'hog';
-          this.hogDev = dev;
-          this.hogRate = wantRate;
-
-          chan = this._createStream(source, false);
-          if (!chan) throw new Error(`重建流失败 err=${this.BASS_ErrorGetCode()}`);
-        } else if (this.chan) {
-          try { this.BASS_StreamFree(this.chan); } catch {}
+        // 独占：被拒（HOG 抢不到 / 速率不支持 / 设备已拔）时立刻用「同一设备」改共享重试
+        try {
+          return this._macExclusiveLoad(source, deviceIndex);
+        } catch (e) {
+          const reason = e.message;
+          const dev = this._resolveMacDevice(deviceIndex);
+          const name = this._devName(dev);
+          console.warn(`[audio] [mac] 独占失败，回落共享：dev=${dev} name="${name}" reason=${reason}`);
+          try {
+            const r = this._macSharedLoad(source, dev, { degraded: true, reason });
+            console.log(`[audio] [mac] DEGRADED exclusive→shared ok mode=${r.mode} dev=${r.device} name="${r.deviceName}" reason=${reason}`);
+            return r;
+          } catch (e2) {
+            throw new Error(`独占失败(${reason})；共享回落也失败(${e2.message})`);
+          }
         }
-
-        this.chan = chan;
-        const info = this._readInfo(chan) || probe;
-        this.info = info;
-
-        if (!this.BASS_ChannelPlay(chan, 1)) {
-          throw new Error(`播放失败 err=${this.BASS_ErrorGetCode()}`);
-        }
-        this.state = 'ready';
-        console.log(`[audio] hog ready ${info.freq}Hz/${info.chans}ch dev=${dev}（独占，未验证）`);
-        return { ok: true, info, deviceRate: wantRate, mode: 'hog' };
       }
 
       // ── ASIO 独占（Windows）──
@@ -317,8 +517,8 @@ class AudioEngine {
 
   play() {
     if (!this.chan) return { ok: false, error: '未加载' };
-    if (this.outputMode === 'hog') {
-      // macOS：hog 模式下是普通播放流，BASS 自己往设备送
+    if (this.outputMode === 'hog' || this.outputMode === 'exclusive' || this.outputMode === 'shared') {
+      // macOS：普通播放流，BASS 自己往设备送（共享/独占都是）
       if (!this.BASS_ChannelPlay(this.chan, 0)) {
         return { ok: false, error: `播放失败 err=${this.BASS_ErrorGetCode()}` };
       }
@@ -335,7 +535,8 @@ class AudioEngine {
   pause() {
     if (!this.chan) return { ok: false, error: '未加载' };
     this.state = 'paused';
-    if (this.outputMode === 'hog' || this.outputMode === 'wasapi') {
+    if (this.outputMode === 'hog' || this.outputMode === 'wasapi' ||
+        this.outputMode === 'exclusive' || this.outputMode === 'shared') {
       this.BASS_ChannelPause(this.chan);
     } else {
       // ASIO 下是解码流，不能 Pause，只能停 ASIO；恢复时再 Start
@@ -346,7 +547,8 @@ class AudioEngine {
 
   resume() {
     if (!this.chan) return { ok: false, error: '未加载' };
-    if (this.outputMode === 'hog' || this.outputMode === 'wasapi') {
+    if (this.outputMode === 'hog' || this.outputMode === 'wasapi' ||
+        this.outputMode === 'exclusive' || this.outputMode === 'shared') {
       if (!this.BASS_ChannelPlay(this.chan, 0)) {
         return { ok: false, error: `恢复失败 err=${this.BASS_ErrorGetCode()}` };
       }
@@ -376,7 +578,8 @@ class AudioEngine {
 
   /** 释放输出设备（保留 BASS 解码器初始化） */
   _teardownOutput() {
-    if ((this.outputMode === 'hog' || this.outputMode === 'wasapi') && this.chan) {
+    if ((this.outputMode === 'hog' || this.outputMode === 'wasapi' ||
+         this.outputMode === 'exclusive' || this.outputMode === 'shared') && this.chan) {
       try { this.BASS_ChannelPause(this.chan); } catch {}
     }
     if (this.asioReady) {
@@ -397,7 +600,31 @@ class AudioEngine {
       pos,
       dur: this.info.dur,
       fmt: { rate: this.info.freq, bits: this.info.bits, ch: this.info.chans },
-      out: this.outputMode === 'wasapi'
+      // macOS：不能在 asioReady 上挂 rate/bitperfect —— mac 上 this.asio 恒为 null，
+      // asioReady 永远 false，那就是「rate 恒 0 / bitperfect 恒 false」的 bug 根因。
+      out: !IS_WIN
+        ? (this.outputMode === 'exclusive' || this.outputMode === 'hog'
+            ? {
+                mode: 'exclusive',
+                device: this.hogDev,          // -1 = 系统默认设备
+                deviceName: this.hogName,
+                rate: this.hogRate,           // 独占：设备已被 HOG+FREQ 切到源采样率
+                cpu: 0,
+                // 设备速率与流速率一致 = 链路没重采样（mac 独占才可能是 true）
+                bitperfect: !!this.hogRate && Math.abs((this.hogRate || 0) - this.info.freq) < 1,
+                degraded: this.degraded
+              }
+            : {
+                mode: 'shared',
+                device: this.sharedDev,       // -1 = 系统默认设备
+                deviceName: this.sharedName,
+                // 共享：由 CoreAudio 混音器定实际速率，这里报流的速率（诊断用）
+                rate: this.info.freq,
+                cpu: 0,
+                bitperfect: false,            // 经系统混音，必然不是 bit-perfect
+                degraded: this.degraded
+              })
+        : this.outputMode === 'wasapi'
         ? {
             mode: 'wasapi',
             device: this.wasapiDev,

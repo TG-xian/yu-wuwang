@@ -199,12 +199,16 @@
       </div>
 
       <div class="out-menu" id="out-menu" hidden>
-        <div class="out-item on" data-mode="asio" data-dev="0" data-label="ASIO · Donner USB Audio Device">ASIO 独占 · Donner</div>
-        <div class="out-item" data-mode="asio" data-dev="1" data-label="ASIO · Realtek ASIO">ASIO 独占 · Realtek</div>
-        <div class="out-sep"></div>
-        <div class="out-item" data-mode="wasapi" data-dev="2" data-label="WASAPI · Livejack">WASAPI 共享 · Livejack</div>
-        <div class="out-item" data-mode="wasapi" data-dev="3" data-label="WASAPI · Realtek">WASAPI 共享 · Realtek</div>
-        <div class="out-sep"></div>
+        <!-- Windows：写死的设备清单（已实测可用，勿动）。
+             macOS：app.js 会整块移除 #out-static，再按引擎枚举到的 CoreAudio 设备动态填充。 -->
+        <div id="out-static">
+          <div class="out-item on" data-mode="asio" data-dev="0" data-label="ASIO · Donner USB Audio Device">ASIO 独占 · Donner</div>
+          <div class="out-item" data-mode="asio" data-dev="1" data-label="ASIO · Realtek ASIO">ASIO 独占 · Realtek</div>
+          <div class="out-sep"></div>
+          <div class="out-item" data-mode="wasapi" data-dev="2" data-label="WASAPI · Livejack">WASAPI 共享 · Livejack</div>
+          <div class="out-item" data-mode="wasapi" data-dev="3" data-label="WASAPI · Realtek">WASAPI 共享 · Realtek</div>
+          <div class="out-sep"></div>
+        </div>
         <div class="out-note">切换后下一次开始播放时生效</div>
       </div>
     </section>
@@ -254,6 +258,12 @@
 </div>
 
 <div class="drop-hint" id="drop-hint" hidden><span>松手即加入音乐库</span></div>
+
+<!-- 轻提示（macOS：独占提示 / 检测到外接声卡 / 声卡断开）。Windows 上不显示。 -->
+<div class="toast" id="toast" hidden>
+  <span class="toast-t" id="toast-t"></span>
+  <div class="toast-act" id="toast-act"></div>
+</div>
 
 <!-- 扫码登录 -->
 <div class="qr-modal" id="qr-modal" hidden>

@@ -62,6 +62,8 @@ wss.on('connection', (ws) => {
       case 'stop':      r = engine.stop(); break;
       case 'seek':      r = engine.seek(Number(msg.seconds) || 0); break;
       case 'volume':    r = engine.setVolume(msg.value); break;
+      // 输出设备枚举：macOS 上返回 CoreAudio 设备列表，Windows 返回 []（渲染层按平台用）
+      case 'devices':   r = { ok: true, devices: engine.listDevices() }; break;
       case 'state':     r = { ok: true, ...engine.snapshot() }; break;
       default:
         ws.send(JSON.stringify({ ev: 'error', code: 'UNKNOWN_CMD', cmd: msg.cmd }));

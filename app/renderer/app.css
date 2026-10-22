@@ -696,3 +696,16 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;}
 ::-webkit-scrollbar-thumb{background:#26262b;border-radius:4px;}
 ::-webkit-scrollbar-thumb:hover{background:#33333a;}
 ::-webkit-scrollbar-track{background:transparent;}
+
+/* ───────── 轻提示（macOS：独占/回落/外接声卡） ───────── */
+.toast{position:fixed;left:50%;bottom:132px;transform:translateX(-50%);z-index:150;
+  display:flex;align-items:center;gap:14px;max-width:min(680px,86vw);
+  background:var(--panel2);border:1px solid var(--line);border-left:2px solid var(--gold);
+  padding:11px 14px;box-shadow:0 12px 30px rgba(0,0,0,.6);}
+.toast[hidden]{display:none;}
+.toast-t{font-size:12px;color:var(--text);letter-spacing:.2px;line-height:1.5;}
+.toast-act{display:flex;gap:8px;flex:none;}
+.toast-btn{font-size:11.5px;color:var(--gold);border:1px solid var(--gold-d);padding:4px 10px;letter-spacing:.6px;border-radius:1px;}
+.toast-btn:hover{color:var(--gold-l);border-color:var(--gold);}
+.toast-btn.sub{color:var(--dim);border-color:var(--line);}
+.toast-btn.sub:hover{color:var(--text);border-color:var(--line2);}

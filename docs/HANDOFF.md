@@ -1,14 +1,17 @@
 # 交接：豫 · 无妄
 
 > 写给下一个接手这个项目的会话。读完这份就能接上，不必翻历史。
-> 最后更新：2026-10-23（M1–M5 完成、Windows 版已发布、mac 版代码就绪未验证）
+> 最后更新：2026-10-23（mac「开箱即用」改造完成，v0.1.1 待真机验证）
 
 ---
 
 ## 一句话现状
 
-Windows 版**已完成并发布**（GitHub Release v0.1.0，功能完整、实测可用）。
-macOS 版**代码就绪但从未在真机运行过**，且已知有一处会让用户静音的 bug。
+Windows 版**已完成并发布**（v0.1.0，实测可用）。
+macOS 版已完成「开箱即用」改造：默认共享输出（装上就有声）、动态设备菜单（扬声器共享 / 声卡独占）、独占失败自动回落、外接声卡提示。
+**仍未在真机运行过**——改造只做到静态正确 + Windows 回归通过，见下面「仍未验证」。
+
+mac 打包只出 **arm64 单包**（朋友是 M 系）。要出 Intel 版改 `package.json` 的 `build.mac.target.arch` 即可。
 
 ---
 
@@ -66,70 +69,75 @@ git tag v0.1.1 && git push origin v0.1.1     # tag 自动触发打包 + 创建 R
 
 **这是本次交接最重要的一节。**
 
-### 已完成
+### 基础（v0.1.0 已有）
 
-- `engine/audio.js` 平台分支：`IS_WIN` 判断，mac 走 `outputMode = 'hog'`
-- 独占用 `BASS_Init(dev, rate, BASS_DEVICE_HOG | BASS_DEVICE_FREQ, ...)`
-  （`BASS_DEVICE_HOG = 0x10000`，在 macOS 版 `bass.h` 第 209 行，已下载核实）
-- `native/darwin/libbass.dylib` + `libbassflac.dylib`（universal binary：x86_64 + i386 + arm64）
+- `engine/audio.js` 平台分支：`IS_WIN` 判断；mac 用 `BASS_DEVICE_HOG`（`bass.h` 第 209 行，已核实）
+- `native/darwin/libbass.dylib` + `libbassflac.dylib`（universal binary）
 - BASSASIO 在 mac 上为 `null`，所有 ASIO 调用被 `if (a)` 包住
 - `build/entitlements.mac.plist`（含 `disable-library-validation`，BASS 预编译库必需）
 - `package.json` 的 `build.mac` + `dist:mac` / `pack:mac`
-- **CI 实测：mac 上 `npm ci` + `npm run dist:mac` 成功产出 arm64 与 x64 两个 dmg**
+- CI 在 mac runner 上已跑通，能产出 dmg
 
-### 已知 bug（会让用户静音，优先修）
+### 2026-10-23 开箱即用改造
 
-**设备选择菜单是写死的 Windows 设备**（`app/renderer/main.html` 的 `#out-menu`）：
+静音的根因不是一个，是四个，全部已修：
 
-```html
-data-mode="asio"   data-dev="0"   ASIO 独占 · Donner
-data-mode="asio"   data-dev="1"   ASIO 独占 · Realtek
-data-mode="wasapi" data-dev="2"   WASAPI 共享 · Livejack
-data-mode="wasapi" data-dev="3"   WASAPI 共享 · Realtek
-```
+| # | 原因 | 位置 | 修法 |
+|---|---|---|---|
+| 1 | 默认 `outDevice: 0` | `app/renderer/js/app.js` settings | mac 默认 `{outMode:'shared', outDevice:'default'}`，boot 迁移旧值 |
+| 2 | 设备 0 在 BASS 里是「No sound」 | `engine/audio.js` `_resolveMacDevice` | `'default'`/0/非法值一律 → **-1**（BASS 惯用法＝系统默认设备），0 显式拦下 |
+| 3 | `#out-menu` 写死 Windows 设备 | `main.html` + `renderMacOutMenu` | mac 动态生成：首项「扬声器（共享）」，其后每台设备「<名>（独占）」 |
+| 4 | hog 被拒直接抛错 | `load()` | 独占失败 → 同设备改共享重试，返回 `degraded:true`，界面说人话 |
 
-mac 上点击的后果：
+其他改动：
 
-| 选项 | 后果 |
-|---|---|
-| 前两个（asio） | `BASS_Init(0, ...)`，**BASS 设备索引 0 = 无声设备** → 直接没声音 |
-| 后两个（wasapi） | 能出声，但走普通初始化，**不是独占**（bit-perfect 丢失） |
+- 引擎新增 `listDevices()`（仅 mac，`BASS_GetDeviceInfo` 遍历 1..N；枚举期间临时关 `BASS_CONFIG_UNICODE` 取 UTF-8 名，结束恢复旧值）
+- 新增 WS 命令 `devices`
+- `_ensureBass()` mac 用 `BASS_Init(-1, …)`
+- `snapshot().out`：mac 独占报 `hogRate` + `bitperfect=(hogRate===info.freq)`；共享报 `info.freq`、`bitperfect=false`
+- 独占可见性：LED 显示「独占 · 设备名」，首次独占一次性提示「其他程序暂时没声音是正常的」
+- 外接声卡提示（**B 方案，不自动切**）：启动后检测到非内置/非蓝牙设备 → toast「检测到 X，要切到独占吗？」→「切换」/「忽略」（记住已忽略的设备名，换新声卡仍提示）
+- 拔声卡 / 独占失败 → 自动回落「扬声器（共享）」并重试一次
+- 托盘：mac `setTemplateImage(true)`（只取 alpha，变单色剪影）
+- 退出：`before-quit` 发 `shutdown`（引擎 `BASS_Free` 释放 hog），`will-quit` 强杀兜底孤儿进程
+- 打包只出 arm64 单包
 
-**修法**：引擎加 `listDevices()`（按平台：Windows 读注册表 `HKLM\SOFTWARE\ASIO` 拿 ASIO 名，mac 用 `BASS_GetDeviceInfo` 拿 CoreAudio 名）→ 渲染层动态生成菜单项。
+### 仍未验证（必须真机）
 
-**注意**：全项目 `grep GetDeviceInfo` 目前**零结果**，设备列表从未动态枚举过。
+以上只做了静态检查 + Windows 回归，**mac 一行都没在真机跑过**。按顺序验：
+
+1. 打开应用**直接有声音**（默认共享，不用动任何设置）
+2. 设备菜单列出 CoreAudio 设备（名字不乱码、默认设备带「· 默认」）
+3. 切「<USB DAC>（独占）」→ 出声；「音频 MIDI 设置」里该 DAC 被独占
+4. 44.1k / 48k / 96k 各播一次 → `snapshot().out.rate` 等于源采样率、`bitperfect: true`
+5. 独占时切到采样率不同的下一首（会有 0.2–0.5s 静默，属正常）
+6. 拔 USB DAC → 自动回「扬声器（共享）」，有提示，不断音
+7. 退出应用 → 整机声音恢复正常（hog 已释放）
+8. 插 USB DAC 启动 → 出现「检测到 X，要切到独占吗？」；点切换生效、点忽略不再提示
+9. 蓝牙耳机 → 不出现独占提示；手动选独占应自动降级到共享
+10. 托盘图标为单色（Template），菜单栏不出现彩色方块
 
 ### 其他降级项
 
 | 项 | 现状 | 影响 |
 |---|---|---|
-| 托盘图标 | `.ico` 加载失败后退 `icon-32.png`，但未 `setTemplateImage(true)` | mac 菜单栏里是彩色方块，观感差 |
 | 本地元数据 | 依赖 `ffprobe`，mac 默认无 | 时长/位深/封面缺失，**播放不受影响** |
 | 窗口按钮 | 在右上角 | mac 用户习惯左上，非标准但可用 |
-
-### 从未验证的（必须真机测）
-
-1. `npm run pack:mac` 能起，握手 `caps.exclusive === 'hog'`
-2. 播歌时开「音频 MIDI 设置」，确认设备**真被独占**
-3. 44.1k / 48k / 96k 各播一次，`snapshot().out.rate` 是否等于源采样率
-4. `bitperfect` 字段是否为 `true`
-5. 暂停 / 恢复 / 切歌后设备是否**正常释放**（不释放会让系统其他声音全哑）
-6. 拔插 USB DAC 后能否恢复
-7. 虚拟声卡（BlackHole 等）拒绝 hog 时能否降级
-8. 拖拽（Finder 拖文件夹入窗）
+| 签名公证 | 不做（他朋友能自己点「仍要打开」） | 首次打开被 Gatekeeper 拦，步骤见 `docs/BUILD.md` 与随包说明卡 |
 
 ---
 
 ## 待办（按优先级）
 
-**P0 — mac 静音 bug**
+**P0 — 真机验证（改造已完成，等验证）**
 
-- [ ] 引擎 `listDevices()` + 渲染层动态设备菜单（见上节修法）
+- [ ] 朋友在 M 系 Mac 上按「仍未验证」10 条跑一遍；出问题把 `npm run dev` 的 console 日志发回来
+- [ ] 若独占全落到共享，查 `BASS_ErrorGetCode`（常见：hog 被其他 App 占用、设备不支持该速率）
 
-**P1 — 让朋友能测**
+**P1 — 交付**
 
-- [ ] 托盘 Template 图标（单色 PNG + `setTemplateImage(true)`）
-- [ ] 朋友在真 Mac 上跑一遍上节的验证清单
+- [ ] 给朋友的「仍要打开」步骤说明（Gatekeeper；Sequoia 起右键打开已失效）
+- [ ] 推 `v0.1.1` 出 arm64 dmg，和说明一起发过去
 
 **P2 — 打磨**
 
@@ -203,6 +211,9 @@ py tools/make-icon.py
 - `BASS_ASIO_DEVICEINFO.name` 在 x64 返回堆地址乱码 → Windows 读注册表 `HKLM\SOFTWARE\ASIO`
 - 中文路径：`Buffer.from(file + '\0', 'utf16le')` + `BASS_UNICODE(0x80000000)`
 - 切歌必须先 `BASS_StreamFree` 旧流，否则新旧叠加 → 音量翻倍削波
+- `BASS_GetDeviceInfo` 实测（Windows BASS 同结构同函数）：**dev 0 = "No sound"、dev 1 = "Default"**；flags `0x1`=enabled、`0x2`=default。mac 用 `-1` 表示系统默认设备，**永远别传 0**
+- `BASS_DEVICEINFO` 64 位布局：`name@0(8) / driver@8(8) / flags@16(4) + padding`，`sizeof=24, alignof=8`（koffi 实测）
+- 枚举设备名要临时 `BASS_SetConfig(42, 0)`（关 UNICODE）拿 UTF-8，结束后用 `BASS_SetConfig` 的返回值恢复旧值
 
 **取流**
 
@@ -218,6 +229,7 @@ py tools/make-icon.py
 - 连点切歌用 `playSeq` 代次号作废过期请求
 - 歌词回来后要校验 `state.current.id === id`，防止先发后到覆盖
 - `replace_all` 对缩进不同的块无效，改完要 grep 复核
+- mac「检测到外接声卡」的判定**不能排除当前默认设备**：macOS 插上 USB DAC 会自动把它设为默认，一排除就永远不提示（本次踩过）
 
 ---
 
@@ -238,8 +250,6 @@ py tools/make-icon.py
 
 ## 下一步建议
 
-1. **先让朋友在真 Mac 上装 v0.1.0 试**，只验证两件事：能不能启动、放歌有没有声音
-2. 如果能出声 → 修 P0 的设备菜单 + P1 托盘图标 → 发 v0.1.1
-3. 如果出不了声 → 先查 hog 是否被拒绝（`BASS_ErrorGetCode`），可能需要降级到共享模式
-
-**别在没确认「能出声」之前就去修设备菜单**——基础盘不通的话，菜单修了也没意义。
+1. 推 `v0.1.1` 出 arm64 单包，连同「仍要打开」说明一起给朋友
+2. 朋友真机按上面 10 条验，重点前三条：能开、有声、独占生效
+3. 出问题先看引擎日志：`[audio] [mac] …` 每行都带 dev / name / hogRate / degraded，一眼能定位是没枚举到设备、还是 hog 被拒

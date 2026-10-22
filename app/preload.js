@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('yw', {
+  /** 只读平台标识（渲染层据此决定输出菜单形态；Windows 走原静态清单） */
+  platform: process.platform,
   onEngineStatus: (cb) => ipcRenderer.on('engine-status', (_e, p) => cb(p)),
   onEngineFailed: (cb) => ipcRenderer.on('engine-failed', (_e, p) => cb(p)),
   status: () => ipcRenderer.invoke('engine:status'),

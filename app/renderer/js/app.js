@@ -7,6 +7,11 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const api = window.YW.api;
 
+/* 平台判断：preload 暴露的只读 platform 字段（app/preload.js）。
+   取不到就按 Windows 处理 —— 保证 Windows 现有行为不变。 */
+const PLATFORM = (window.yw && window.yw.platform) || 'win32';
+const IS_MAC = PLATFORM === 'darwin';
+
 /* ────────── 主页占位数据（下一步接 /personalized 与 /recommend/songs） ────────── */
 const HOME_MOCK = {
   playlists: [
@@ -27,7 +32,15 @@ const HOME_MOCK = {
 /* ────────── 设置持久化（音量 / 输出设备 / 播放模式） ────────── */
 const SET_KEY = 'yw.settings.v1';
 const settings = Object.assign(
-  { volume: 1.0, outDevice: 0, outMode: 'asio', outLabel: 'ASIO 独占 · Donner', playMode: 'list' },
+  IS_MAC
+    // macOS 默认：CoreAudio 共享 + 系统默认设备 → 装上就有声音。
+    // 老配置里的 outDevice:0 / outMode:'asio' 会在 boot() 里迁移（0 在 BASS 是 No sound）。
+    ? {
+        volume: 1.0, outDevice: 'default', outMode: 'shared', outLabel: '扬声器（共享）', playMode: 'list',
+        exclusiveHintShown: false,   // 「独占时别的程序没声音」这句只说一次
+        dismissedDevices: []         // 用户点过「忽略」的外接声卡名
+      }
+    : { volume: 1.0, outDevice: 0, outMode: 'asio', outLabel: 'ASIO 独占 · Donner', playMode: 'list' },
   JSON.parse(localStorage.getItem(SET_KEY) || '{}')
 );
 function saveSettings() {
@@ -58,6 +71,9 @@ const state = {
   radioFetching: false,
   radioLastAt: 0,          // 节流时间戳
   engineOpen: false,
+  lastLoad: null,          // 最近一次 load 参数（mac 上输出回落时重试用）
+  outFallbackDone: false,  // mac 输出回落是否已试过一次（防抖，避免无限重试）
+  dacHintChecked: false,   // mac 外接声卡提示只在启动后判断一次
   stallCheck: { lastPos: 0, lastAt: 0, retried: 0 },
   localSnapshot: null,     // 启动时扫描的结果，进本地页直接复用
   localTracks: null,
@@ -115,6 +131,7 @@ function connectEngine() {
   eng.onopen = () => {
     state.engineOpen = true;
     console.log('[ui] engine ws open');
+    if (IS_MAC) requestDevices();   // mac：连上就问一遍 CoreAudio 设备，动态生成菜单
   };
   eng.onclose = () => {
     console.warn('[ui] engine ws closed, retry in 1.5s');
@@ -123,18 +140,39 @@ function connectEngine() {
   eng.onerror = () => {};
   eng.onmessage = (e) => {
     let m; try { m = JSON.parse(e.data); } catch { return; }
-    if (m.ev === 'ready') { setLed(true, 'ASIO · 就绪'); return; }
+    if (m.ev === 'ready') { setLed(true, IS_MAC ? 'CoreAudio · 就绪' : 'ASIO · 就绪'); return; }
     if (m.ev === 'ack') {
+      if (m.cmd === 'devices') { renderMacOutMenu(m.devices || []); return; }
       if (m.cmd === 'load') {
         setLoading(false);
         if (!m.ok) {
-          setStatus('LOAD FAILED: ' + m.error);
+          if (!IS_MAC) setStatus('LOAD FAILED: ' + m.error);   // mac 交给 macLoadFailed 说人话
           state.playing = false;
           $('#disc').classList.remove('playing');
+          if (IS_MAC) macLoadFailed(m.error);   // 设备拔了/被抢：回落「扬声器（共享）」并重试
         } else {
           const f = m.info || {};
+          state.outFallbackDone = false;
           $('#pl-tag').textContent = `SQ LOSSLESS · ${(f.freq / 1000).toFixed(1)} kHz / ${f.bits} bit`;
-          setStatus(`ASIO · ${f.freq} Hz / ${f.bits} bit`);
+          if (IS_MAC) {
+            // 界面只说人话；err 码只在 console 里（引擎已打）
+            const dn = m.deviceName || outDevName(m.device);
+            showOutBadge(m.mode, dn);
+            if (m.mode === 'exclusive') {
+              setStatus(`独占 · ${dn} · ${(f.freq / 1000).toFixed(1)} kHz / ${f.bits} bit`);
+              hintExclusiveOnce();
+            } else if (m.degraded) {
+              // 引擎已把独占失败降级成共享：告诉用户为什么，但不提 err 码
+              setStatus('这个声卡不支持独占，已自动改用共享输出');
+              showToast('这个声卡不支持独占，已自动改用共享输出', [], 9000);
+              console.warn(`[out] mac 独占失败已回落共享 reason=${m.reason || '-'}`);
+            } else {
+              setStatus(`共享 · ${(f.freq / 1000).toFixed(1)} kHz / ${f.bits} bit`);
+            }
+            console.log(`[out] mac load ok mode=${m.mode} dev=${m.device} name=${dn} degraded=${!!m.degraded} reason=${m.reason || '-'}`);
+          } else {
+            setStatus(`ASIO · ${f.freq} Hz / ${f.bits} bit`);
+          }
           engSend({ cmd: 'play' });
         }
       }
@@ -142,6 +180,13 @@ function connectEngine() {
     }
     if (m.ev === 'state') applyState(m);
   };
+}
+
+/** 统一发 load：记住最后一次 load 参数，供 mac 上「输出回落」后自动重试 */
+function sendLoad({ source, trackId }) {
+  state.lastLoad = { source, trackId: trackId ?? null };
+  state.outFallbackDone = false;
+  return engSend({ cmd: 'load', source, trackId: trackId ?? null, deviceIndex: outDevice, mode: outMode });
 }
 
 function engSend(obj) {
@@ -153,6 +198,42 @@ function engSend(obj) {
   return false;
 }
 function setStatus(txt) { $('#pl-status-txt').textContent = txt; }
+
+/* ────────── 轻提示（仅 macOS）：独占说明 / 外接声卡 / 声卡断开 ──────────
+   err 码一律只进 console.log，界面只说人话。Windows 上不显示。 */
+const toastEl = $('#toast');
+const toastText = $('#toast-t');
+const toastAct = $('#toast-act');
+let toastTimer = null;
+
+function hideToast() {
+  if (toastEl) toastEl.hidden = true;
+  clearTimeout(toastTimer);
+}
+
+function showToast(text, actions = [], ms = 12000) {
+  if (!IS_MAC || !toastEl) return;     // Windows：整段不执行，界面与改动前一致
+  toastText.textContent = text;
+  toastAct.innerHTML = '';
+  for (const a of actions) {
+    const b = document.createElement('button');
+    b.className = 'toast-btn' + (a.sub ? ' sub' : '');
+    b.textContent = a.label;
+    b.addEventListener('click', () => { hideToast(); if (a.onClick) a.onClick(); });
+    toastAct.appendChild(b);
+  }
+  toastEl.hidden = false;
+  clearTimeout(toastTimer);
+  if (ms > 0) toastTimer = setTimeout(hideToast, ms);
+  console.log(`[toast] ${text}`);
+}
+
+/** 独占生效时把「独占 · 设备名」摆到播放页 LED 上（用户得看得见设备被 hog 了） */
+function showOutBadge(mode, devName) {
+  if (!IS_MAC) return;
+  if (mode === 'exclusive') setLed(true, `独占 · ${devName || '声卡'}`);
+  else setLed(true, '共享 · 系统混音');
+}
 
 /** 唱臂：播放时落针在盘，暂停/取流时摆开 */
 function setArm(onDisc) {
@@ -568,7 +649,7 @@ async function playTrack(track) {
   if (track.path) {
     setStatus('打开本地文件…');
     loadLyricLocal(track);
-    if (!engSend({ cmd: 'load', source: track.path, trackId: null, deviceIndex: outDevice, mode: outMode })) {
+    if (!sendLoad({ source: track.path, trackId: null })) {
       setStatus('引擎未连接'); done(); return false;
     }
     pushRecent(track);
@@ -624,7 +705,7 @@ async function playTrack(track) {
 
   loadLyric(track.id);
 
-  if (!engSend({ cmd: 'load', source: u.url, trackId: track.id, deviceIndex: outDevice, mode: outMode })) {
+  if (!sendLoad({ source: u.url, trackId: track.id })) {
     console.warn(`[play] 引擎未连接（WS ${state.engineOpen ? 'open' : 'closed'}）`);
     setStatus('引擎未连接'); done(); return false;
   }
@@ -1654,10 +1735,27 @@ document.addEventListener('click', (e) => {
   playTrack(t);
 });
 
-/* ────────── 播放页控制：上/下一曲、音量、输出设备 ────────── */
+/* ────────── 输出设备 ──────────
+   Windows：main.html 里写死的 ASIO/WASAPI 清单（已实测，逻辑保持原样）
+   macOS  ：引擎枚举 CoreAudio 设备 → 动态生成「扬声器（共享）」+ 每台设备「（独占）」
+*/
 let outDevice = 0;
-let outMode = 'asio';   // asio | wasapi（共享）
+let outMode = 'asio';   // Windows: asio | wasapi ／ macOS: shared | exclusive
+let macDevices = [];    // macOS：最近一次枚举到的设备
+const OUT_DEFAULT_LABEL = '扬声器（共享）';
 // 音量：ASIO 独占下由声卡实体旋钮（或系统/功放）控制，本程序不提供软件音量
+
+/** mac：把设置里的 mode 归一成 shared | exclusive（老配置 'asio'/'hog' → exclusive） */
+function macMode(m) {
+  if (m === 'shared' || m === 'wasapi') return 'shared';
+  return 'exclusive';
+}
+/** mac：把设置里的 device 归一成 'default' 或设备索引（0 在 BASS 里是 No sound，一律当默认） */
+function macDev(v) {
+  if (v === undefined || v === null || v === 'default' || v === '') return 'default';
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 1 ? n : 'default';
+}
 
 const MODE_META = {
   list: { label: '列表循环', path: '<path d="M7 8h10a3 3 0 0 1 0 6h-2"/><path d="M17 16H7a3 3 0 0 1 0-6h2"/><path d="M8.5 5.5 6 8l2.5 2.5"/><path d="M15.5 18.5 18 16l-2.5-2.5"/>' },
@@ -1693,25 +1791,213 @@ $('#like-switch').addEventListener('click', () => {
 $('#pl-prev').addEventListener('click', () => advance(-1));
 $('#pl-next').addEventListener('click', () => advance(1));
 
+/** mac：设备号 → 显示名（-1/'default' = 扬声器） */
+function outDevName(dev) {
+  if (dev === -1 || dev === 'default' || dev === undefined || dev === null) return '扬声器';
+  const d = macDevices.find((x) => String(x.index) === String(dev));
+  return d ? d.name : '设备';
+}
+
+/** mac：第一次真正跑到独占时，说一句人话解释「为什么别的程序没声音」 */
+function hintExclusiveOnce() {
+  if (!IS_MAC || settings.exclusiveHintShown) return;
+  settings.exclusiveHintShown = true;
+  saveSettings();
+  showToast('独占时其他程序暂时没有声音是正常的', [], 12000);
+}
+
+/** mac：切到某台设备独占（外接声卡提示里的「切换」走这里） */
+function switchToExclusive(d) {
+  outMode = 'exclusive';
+  outDevice = d.index;
+  settings.outMode = outMode;
+  settings.outDevice = outDevice;
+  settings.outLabel = `${d.name}（独占）${d.isDefault ? ' · 默认' : ''}`;
+  saveSettings();
+  applyOutUI();
+  state.outFallbackDone = false;
+  setStatus('已切到独占，下一次播放生效');
+  console.log(`[out] mac 切到独占 dev=${d.index} name=${d.name}`);
+}
+
+/** mac：用户点「忽略」→ 这台设备以后不再提示（换新声卡仍会提示） */
+function dismissDac(d) {
+  const list = Array.isArray(settings.dismissedDevices) ? settings.dismissedDevices : [];
+  if (!list.includes(d.name)) list.push(d.name);
+  settings.dismissedDevices = list;
+  saveSettings();
+  console.log(`[out] mac 已忽略外接声卡提示 name=${d.name}`);
+}
+
+/**
+ * mac：启动后第一次拿到设备列表时判断一次「是不是插着外接声卡」。
+ * 只提示一次（每台设备一次），不做自动切换 —— 用户自己点。
+ * 判定顺序（宁可不提示也别乱提示）：排除内置/蓝牙，取剩下的第一台，且不能是当前默认设备。
+ */
+function maybeHintExternalDac() {
+  if (!IS_MAC || state.dacHintChecked) return;
+  state.dacHintChecked = true;
+  if (outMode !== 'shared') return;                       // 已经在独占，不打扰
+
+  // 内置扬声器 / 蓝牙（独占对蓝牙必失败）都不提示
+  const SKIP = /Built-in|内置|Internal|MacBook|AirPods|Bluetooth|蓝牙/i;
+  const defIdx = (macDevices.find((d) => d.isDefault) || {}).index;
+  // 不能排除「当前系统默认设备」：macOS 插上 USB DAC 后通常会自动把它设为默认，
+  // 此时我们正以共享模式输出到这台 DAC —— 恰恰是最该提示切独占的时刻。
+  const cand = macDevices.find((d) => !SKIP.test(`${d.name} ${d.driver}`));
+  if (!cand) { console.log('[out] mac 没有可提示的外接声卡'); return; }
+
+  const dismissed = Array.isArray(settings.dismissedDevices) ? settings.dismissedDevices : [];
+  if (dismissed.includes(cand.name)) { console.log(`[out] mac 外接声卡已忽略过 name=${cand.name}`); return; }
+
+  console.log(`[out] mac 检测到外接声卡 index=${cand.index} name=${cand.name} 默认设备 index=${defIdx}`);
+  showToast(`检测到 ${cand.name}，要切到独占吗？`, [
+    { label: '切换', onClick: () => switchToExclusive(cand) },
+    { label: '忽略', sub: true, onClick: () => dismissDac(cand) }
+  ], 15000);
+}
+
 const outSel = $('#pl-output');
 const outMenu = $('#out-menu');
+
+/** mac：向引擎要设备清单（WS 连上时、每次打开菜单时各问一次，USB 热插拔能反映出来） */
+function requestDevices() {
+  if (!IS_MAC) return false;
+  return engSend({ cmd: 'devices' });
+}
+
+/** mac：按设备清单重建 #out-menu（第一项固定「扬声器（共享）」，其后每台设备一个独占项） */
+function renderMacOutMenu(devices) {
+  if (!IS_MAC || !outMenu) return;
+  const stat = $('#out-static');
+  if (stat) stat.remove();            // Windows 的写死项在 mac 上一个都不适用
+  outMenu.querySelectorAll('.out-item, .out-sep').forEach((n) => n.remove());
+
+  macDevices = (devices || []).filter((d) => d && Number(d.index) >= 1);   // 只认 ≥1（0 = No sound）
+  console.log(`[out] mac 设备 ${macDevices.length} 台: ` +
+    macDevices.map((d) => `${d.index}:${d.name}${d.isDefault ? '(默认)' : ''}`).join(' | '));
+
+  const note = outMenu.querySelector('.out-note');
+  const add = (el) => outMenu.insertBefore(el, note || null);
+  const mk = (dev, mode, label) => {
+    const el = document.createElement('div');
+    el.className = 'out-item';
+    el.dataset.dev = String(dev);
+    el.dataset.mode = mode;
+    el.dataset.label = label;
+    el.textContent = label;
+    return el;
+  };
+  const sep = () => {
+    const el = document.createElement('div');
+    el.className = 'out-sep';
+    return el;
+  };
+
+  add(mk('default', 'shared', OUT_DEFAULT_LABEL));
+  add(sep());
+  if (!macDevices.length) {
+    const el = document.createElement('div');
+    el.className = 'out-item disabled';
+    el.textContent = '未枚举到输出设备';
+    add(el);
+  }
+  for (const d of macDevices) {
+    add(mk(d.index, 'exclusive', `${d.name}（独占）${d.isDefault ? ' · 默认' : ''}`));
+  }
+
+  // 旧配置迁移来的「独占 + 系统默认设备」（引擎接受 'default'，菜单项却是按索引的）：
+  // 设备列表回来后绑到实际的默认设备索引上，菜单才能高亮到具体那一台。
+  if (outMode === 'exclusive' && outDevice === 'default') {
+    const def = macDevices.find((d) => d.isDefault) || macDevices[0];
+    if (def) {
+      outDevice = def.index;
+      settings.outDevice = outDevice;
+      saveSettings();
+      console.log(`[out] mac 独占默认设备 → 绑定到 index=${def.index} name=${def.name}`);
+    }
+  }
+
+  applyOutUI();
+  maybeHintExternalDac();   // 启动后第一次拿到设备列表时判断一次外接声卡（内部有一次性开关）
+}
+
+/** mac：把 outMode/outDevice 的当前值画到菜单和顶栏按钮上 */
+function applyOutUI() {
+  if (!IS_MAC || !outSel || !outMenu) return '';
+  const wantMode = outMode === 'exclusive' ? 'exclusive' : 'shared';
+  const wantDev = wantMode === 'exclusive' ? String(outDevice) : 'default';
+  let hit = null;
+  outMenu.querySelectorAll('.out-item').forEach((x) => {
+    const on = x.dataset.mode === wantMode && x.dataset.dev === wantDev;
+    x.classList.toggle('on', on);
+    if (on) hit = x;
+  });
+  const label = (hit && hit.dataset.label) ||
+    (wantMode === 'shared' ? OUT_DEFAULT_LABEL : `${(macDevices.find((d) => String(d.index) === wantDev) || {}).name || '设备'}（独占）`);
+  settings.outLabel = label;
+  outSel.textContent = label + ' ▾';
+  return label;
+}
+
+/** mac：load 失败时回落「扬声器（共享）」并重试一次（典型场景：拔了 USB 声卡） */
+function macLoadFailed(err) {
+  if (!IS_MAC) return;
+  const s = state.lastLoad;
+  if (!s) return;
+  // err 码只进 console；界面说人话
+  console.warn(`[out] mac 输出失败：${err}`);
+  if (state.outFallbackDone) { setStatus('这台声卡用不了，请换一台或改用扬声器（共享）'); return; }
+  if (outMode === 'shared' && outDevice === 'default') { setStatus('播放失败，请检查输出设备或稍后重试'); return; }
+
+  state.outFallbackDone = true;
+  outMode = 'shared';
+  outDevice = 'default';
+  settings.outMode = outMode;
+  settings.outDevice = outDevice;
+  settings.outLabel = OUT_DEFAULT_LABEL;
+  saveSettings();
+  applyOutUI();
+  showOutBadge('shared');
+  setStatus('声卡已断开，已切回扬声器');
+  showToast('声卡已断开，已切回扬声器', [], 9000);
+  requestDevices();                 // 顺手刷新设备列表（拔掉的声卡会消失）
+  setTimeout(() => {
+    if (!sendLoad(s)) setStatus('引擎未连接');
+  }, 150);
+}
+
 if (outSel && outMenu) {
-  outSel.addEventListener('click', (e) => { e.stopPropagation(); outMenu.hidden = !outMenu.hidden; });
+  outSel.addEventListener('click', (e) => {
+    e.stopPropagation();
+    outMenu.hidden = !outMenu.hidden;
+    if (IS_MAC && !outMenu.hidden) requestDevices();   // 打开菜单时刷一次设备
+  });
   document.addEventListener('click', () => { outMenu.hidden = true; });
   outMenu.addEventListener('click', (e) => {
     e.stopPropagation();
     const it = e.target.closest('.out-item');
     if (!it || it.classList.contains('disabled')) return;
-    outDevice = Number(it.dataset.dev) || 0;
-    outMode = it.dataset.mode || 'asio';
+
+    if (IS_MAC) {
+      outMode = macMode(it.dataset.mode);
+      outDevice = macDev(it.dataset.dev);
+    } else {
+      outDevice = Number(it.dataset.dev) || 0;
+      outMode = it.dataset.mode || 'asio';
+    }
+
     settings.outDevice = outDevice;
     settings.outMode = outMode;
-    settings.outLabel = it.dataset.label || 'ASIO 独占 · Donner';
+    settings.outLabel = it.dataset.label || (IS_MAC ? OUT_DEFAULT_LABEL : 'ASIO 独占 · Donner');
     saveSettings();
-    outMenu.querySelectorAll('.out-item').forEach((x) => x.classList.toggle('on', x === it));
+    state.outFallbackDone = false;
+    if (IS_MAC) applyOutUI();
+    else outMenu.querySelectorAll('.out-item').forEach((x) => x.classList.toggle('on', x === it));
     outSel.textContent = settings.outLabel + ' ▾';
     outMenu.hidden = true;
     setStatus(`输出切到 ${settings.outLabel}，下一次播放生效`);
+    if (IS_MAC) console.log(`[out] mac 选择 mode=${outMode} dev=${outDevice} label=${settings.outLabel}`);
   });
 }
 
@@ -1780,10 +2066,7 @@ async function healCurrent(atPos) {
     const u = await api.songUrl(t.id, 'lossless');
     if (!u.url) { console.warn('[heal] 重取无直链'); return; }
 
-    engSend({
-      cmd: 'load', source: u.url, trackId: t.id,
-      deviceIndex: outDevice, mode: outMode,
-    });
+    sendLoad({ source: u.url, trackId: t.id });
 
     // load 完成后跳回原位置（给引擎留出建流 + 启动时间）
     setTimeout(() => {
@@ -2133,12 +2416,33 @@ async function boot() {
   console.log('BOOT 界面就绪, engine ws 连接中');
 
   // 恢复输出设备 / 播放模式
-  outDevice = Number(settings.outDevice ?? 0);
-  outMode = settings.outMode || 'asio';
+  if (IS_MAC) {
+    // 老配置（Windows 侧写的 outMode:'asio' / outDevice:0）在 mac 上要迁移：
+    //   'asio' → 'exclusive'；设备 0 → 'default'（BASS 里 0 是 No sound，会静音）
+    const m = macMode(settings.outMode);
+    const d = macDev(settings.outDevice);
+    if (m !== settings.outMode || d !== settings.outDevice) {
+      console.log(`[out] mac 迁移旧输出设置 ${settings.outMode}/${settings.outDevice} → ${m}/${d}`);
+      outMode = m;
+      outDevice = d;
+      settings.outMode = m;
+      settings.outDevice = d;
+      settings.outLabel = m === 'shared' ? OUT_DEFAULT_LABEL : (settings.outLabel || '设备（独占）');
+      saveSettings();
+    } else {
+      outMode = m;
+      outDevice = d;
+    }
+    console.log(`[out] mac 恢复设置 mode=${outMode} dev=${outDevice}`);
+  } else {
+    outDevice = Number(settings.outDevice ?? 0);
+    outMode = settings.outMode || 'asio';
+  }
   updateModeUI();
   const os = $('#pl-output');
-  if (os) os.textContent = (settings.outLabel || 'ASIO 独占 · Donner') + ' ▾';
+  if (os) os.textContent = (settings.outLabel || (IS_MAC ? OUT_DEFAULT_LABEL : 'ASIO 独占 · Donner')) + ' ▾';
   console.log(`SETTINGS_OK out=${outMode}/${outDevice} playMode=${settings.playMode}`);
+  if (IS_MAC) requestDevices();   // 菜单在设备回来后重建（WS 已连上时立即生效）
 
   try {
     const cookie = (window.yw && window.yw.getCookie) ? await window.yw.getCookie() : '';

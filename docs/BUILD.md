@@ -110,7 +110,7 @@ npm run dist:mac     # 出 dmg
 
 **采样率匹配的关键区别**：Windows 上是"告诉 ASIO 驱动用这个速率"，macOS 上是 `BASS_DEVICE_FREQ` 让 CoreAudio 把设备本身切过去。两者都是**设备跟随流**，不是"流被重采样"——后者的方向搞反就毁了 bit-perfect。
 
-`engine/audio.js` 里的分支靠 `IS_WIN` 判断，macOS 走 `outputMode = 'hog'`。
+`engine/audio.js` 里的分支靠 `IS_WIN` 判断；macOS 有 `shared`（无 HOG，走系统混音）与 `exclusive`（HOG + FREQ）两种，**默认 `shared`**（装上就有声），`exclusive` 失败自动降级。
 
 ### 依赖与文件
 
@@ -126,27 +126,19 @@ npm run dist:mac     # 出 dmg
 
 `build/entitlements.mac.plist` 已备好，其中 `com.apple.security.cs.disable-library-validation` 是**必需**的——`libbass.dylib` 是 un4seen 的预编译库，没有我们的签名，不关掉库校验会被 Gatekeeper 拦掉。
 
-- **本地自用**：可以不签名，右键「打开」绕过 Gatekeeper
-- **给别人用**：需要 Apple Developer 账号（$99/年）+ 公证，否则对方打不开
+- **本项目选择不签名**（用户 2026-10-23 决定：对方能自己点「仍要打开」）
+- 未签名包首次打开（**Sequoia 起按住 Control 右键的老办法已失效**）：双击 → 提示「已损坏」点「完成」→ 系统设置 → 隐私与安全性 → 页面下方找到「豫无妄」→「仍要打开」→ 输密码
+- 若以后要做真正双击即开：Apple Developer 账号（$99/年 ≈ ¥661，按汇率 6.674 估算）+ 公证，CI 里配 `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD` 或 App Store Connect API Key
 
-### 真机验证清单（未做，必须补）
+### 真机验证清单
 
-代码写完了，但**没有在 Mac 上跑过**，以下每一条都得实测：
-
-1. `npm run pack:mac` 能起，引擎握手 `caps.exclusive === 'hog'`
-2. 播一首歌，**同时**打开「音频 MIDI 设置」→ 看该设备是否被独占（其他 App 无法发声）
-3. 44.1k / 48k / 96k 三种文件各播一次，`snapshot().out.rate` 是否等于源采样率
-4. `bitperfect` 字段是否为 `true`
-5. 暂停 / 恢复 / 切歌后设备是否正常释放（hog 不释放会让系统其他声音全哑）
-6. 拔插 USB DAC 后能否恢复
-7. 托盘、无边框窗口、拖拽（mac 上是 Finder 拖拽）是否正常
-8. `ffprobe` 是否存在（mac 上默认没有，本地音乐元数据会退化）
+见 `docs/HANDOFF.md` 的「仍未验证（必须真机）」10 条（2026-10-23 更新：默认共享、独占切换、采样率跟随、拔插回落、退出释放、外接声卡提示、蓝牙降级、托盘 Template）。
 
 ### 已知未处理
 
-- **设备选择菜单**：`out-menu` 里写死了 Windows 设备名（`ASIO · Donner` 等）。mac 上要用 `BASS_GetDeviceInfo` 动态枚举 CoreAudio 设备（设备名在 mac 上不会乱码，比 Windows ASIO 好办）
+- **设备选择菜单** → 已修（2026-10-23）：mac 用 `BASS_GetDeviceInfo` 动态枚举，首项「扬声器（共享）」，其后每台「<名>（独占）」
 - **`ffprobe`**：mac 上需要 `brew install ffmpeg`，否则本地库没有时长/位深
-- **`BASS_DEVICE_HOG` 需要设备支持**：虚拟声卡（BlackHole 等）可能拒绝 hog，要能降级到共享模式
+- **`BASS_DEVICE_HOG` 需要设备支持** → 已处理：拒绝时自动降级到共享并在界面提示
 
 ---
 

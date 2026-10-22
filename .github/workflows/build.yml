@@ -47,11 +47,12 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
-      - name: 打包（dmg，arm64 + x64）
+      - name: 打包（dmg，arm64）
         run: npm run dist:mac
         env:
           # 没有 Apple Developer 证书，跳过签名。
-          # 产物未签名：用户首次打开需要右键「打开」或执行 xattr -cr
+          # 产物未签名：首次打开会被 Gatekeeper 拦，需在「系统设置 → 隐私与安全性」
+          # 页面下方点「仍要打开」。macOS Sequoia 起，按住 Control 右键的老办法已失效。
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: 上传产物
