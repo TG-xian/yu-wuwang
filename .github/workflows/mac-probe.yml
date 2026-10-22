@@ -1,0 +1,30 @@
+name: mac 探针
+
+# 只做一件事：在真 darwin 上验证 BASS 运行时（dylib 加载 / 设备枚举 / Init(-1) / HOG）。
+# 不产出任何发布物，失败也不阻塞发布流程。
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/probe-mac-bass.js'
+      - '.github/workflows/mac-probe.yml'
+
+jobs:
+  probe:
+    runs-on: macos-14          # arm64（Apple Silicon），与朋友的 M 系一致
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 运行时探针
+        run: |
+          echo "runner arch = $(uname -m) / macOS $(sw_vers -productVersion)"
+          node tools/probe-mac-bass.js
