@@ -63,7 +63,8 @@ class AudioEngine {
     this.chan = 0;
     this.info = null;       // { freq, chans, bits, dur }
     this.state = 'idle';    // idle | loading | ready | playing | paused | error
-    // asio | wasapi（Windows） | exclusive | shared | hog（macOS，hog 为 exclusive 的旧名）
+    // asio | wasapi（Windows） | exclusive | shared | follow（macOS；hog 为 exclusive 的旧名）
+    // follow = 共享（不带 HOG，仍经系统混音）+ BASS_DEVICE_FREQ（设备跟随源采样率）
     this.outputMode = 'asio';
     this.wasapiDev = null;
     this.hogDev = null;         // macOS：当前独占的设备（-1 = 系统默认设备）
@@ -71,7 +72,10 @@ class AudioEngine {
     this.hogName = '';          // macOS：独占设备名（只用于日志/诊断）
     this.sharedDev = null;      // macOS：当前共享输出的设备（-1 = 系统默认设备）
     this.sharedName = '';       // macOS：共享设备名
-    this.degraded = false;      // macOS：本次输出是不是独占失败后回落来的
+    this.followDev = null;      // macOS：follow 模式的设备（-1 = 系统默认设备）
+    this.followRate = 0;        // macOS：follow 模式已把设备切到的采样率
+    this.followName = '';       // macOS：follow 模式的设备名（日志/诊断）
+    this.degraded = false;      // macOS：本次输出是不是独占/follow 失败后回落来的
     this.volume = 1.0;      // 0..1，走 ASIO 通道增益，不动 BASS_ATTRIB_VOL
     this.lastError = '';
     this._loadFns();
@@ -374,9 +378,84 @@ class AudioEngine {
     };
   }
 
+  /**
+   * macOS 跟随采样率输出（第三种模式）：共享 + FREQ，但**不带 HOG**。
+   * BASS_DEVICE_FREQ 让 CoreAudio 把设备本身切到源采样率（设备跟随流，不是流被重采样），
+   * 同时设备仍归系统混音器所有 —— 别的 App 还能出声，代价是链路上仍有系统混音（非 bit-perfect）。
+   * 真机实测（CI macos-14 arm64）：BASS_Init(-1, 44100/96000, BASS_DEVICE_FREQ) 均返回成功。
+   *
+   * 缓存命中（同一设备、同一速率）时只换流，不重开设备，避免切歌时额外静默。
+   * 任一阶段失败都抛错，由 load() 捕获后回落普通共享。
+   */
+  _macFollowLoad(source, dev, extra = {}) {
+    this._ensureBass();
+
+    // 先建流，只为了读出源采样率（设备速率得跟着它走）
+    let chan = this._createStream(source, false);
+    if (!chan) throw new Error(`建流失败 err=${this.BASS_ErrorGetCode()}（URL 失效或无权限？）`);
+    const probe = this._readInfo(chan);
+    if (!probe) {
+      try { this.BASS_StreamFree(chan); } catch {}
+      throw new Error(`读流信息失败 err=${this.BASS_ErrorGetCode()}`);
+    }
+
+    const wantRate = probe.freq;
+    const needReinit = !(
+      this.outputMode === 'follow' && this.bassReady &&
+      this.followDev === dev && this.followRate === wantRate
+    );
+
+    let name = this.followName;
+    if (needReinit) {
+      try { this.BASS_StreamFree(chan); } catch {}
+      if (this.chan) { try { this.BASS_StreamFree(this.chan); } catch {} this.chan = 0; }
+      // 只有 FREQ，没有 HOG：设备仍属系统混音，任何 App 都能继续用
+      this._reinitBass(dev, wantRate, F.BASS_DEVICE_FREQ);
+      this.outputMode = 'follow';
+      this.followDev = dev;
+      this.followRate = wantRate;
+      name = this._devName(dev);
+      this.followName = name;
+      this.sharedDev = null;
+      this.sharedName = '';
+      this.hogDev = null;
+      this.hogRate = 0;
+      this.hogName = '';
+      this.degraded = !!extra.degraded;
+      console.log(`[audio] [mac] follow 设备已打开 dev=${dev} name="${name}" ` +
+        `followRate=${wantRate}Hz (共享 + FREQ，无 HOG)`);
+      chan = this._createStream(source, false);
+      if (!chan) throw new Error(`重建流失败 err=${this.BASS_ErrorGetCode()}`);
+    } else if (this.chan) {
+      try { this.BASS_StreamFree(this.chan); } catch {}
+      console.log(`[audio] [mac] follow 缓存命中 dev=${dev} followRate=${wantRate}Hz，只换流`);
+    }
+
+    this.chan = chan;
+    const info = this._readInfo(chan) || probe;
+    this.info = info;
+
+    if (!this.BASS_ChannelPlay(chan, 1)) {
+      throw new Error(`共享(跟随)播放失败 dev=${dev} err=${this.BASS_ErrorGetCode()}`);
+    }
+    this.state = 'ready';
+    console.log(`[audio] [mac] follow ready ${info.freq}Hz/${info.chans}ch dev=${dev} ` +
+      `name="${name}" followRate=${wantRate}Hz degraded=${this.degraded}` +
+      `${extra.reason ? ` reason=${extra.reason}` : ''}`);
+    return {
+      ok: true, info, deviceRate: wantRate, mode: 'follow', device: dev,
+      deviceName: name,
+      // 仍是系统混音链路：设备速率虽跟上了源，但混音器还在路上，不算 bit-perfect
+      bitperfect: false,
+      degraded: this.degraded, reason: extra.reason || null,
+      note: 'CoreAudio 共享 + FREQ：设备跟随源采样率，但经系统混音，非 bit-perfect'
+    };
+  }
+
   /** 加载并准备播放（不自动起播）。
    *  mode: 'exclusive' 独占（默认；老名字 'asio'/'hog' 等价）
    *        'shared'    共享（老名字 'wasapi' 等价）
+   *        'follow'    共享 + 设备跟随源采样率（macOS；Windows 上等价 wasapi 共享）
    */
   load(source, { deviceIndex, mode = 'asio' } = {}) {
     this.state = 'loading';
@@ -384,8 +463,11 @@ class AudioEngine {
       // 模式别名（新旧名字都要能用）：
       //   shared    = 'wasapi'  → Windows: WASAPI 共享   / macOS: CoreAudio 共享（系统混音）
       //   exclusive = 'asio' | 'hog' → Windows: ASIO 独占 / macOS: CoreAudio HOG 独占
+      //   follow    = macOS: 共享 + BASS_DEVICE_FREQ（设备跟随源采样率）
+      //               Windows: 等价 WASAPI 共享（Windows 侧的共享本来就是系统混音器定速率）
       // 注意：未知 mode 仍按独占走（与改动前一致）。
-      const wantShared = mode === 'wasapi' || mode === 'shared';
+      const wantFollow = mode === 'follow';
+      const wantShared = mode === 'wasapi' || mode === 'shared' || wantFollow;
 
       // ── WASAPI 共享 ──
       if (wantShared && IS_WIN) {
@@ -425,6 +507,29 @@ class AudioEngine {
       // 设备号：0 在 BASS 里是「No sound」虚拟设备，mac 上绝不能传（会静音）；
       // 「系统默认设备」用 -1 传 BASS_Init。
       if (!IS_WIN) {
+        // follow 必须排在 shared 前面：wantShared 里也包含 follow（那是 Windows 侧的映射），
+        // mac 上两者走的是不同函数。
+        if (wantFollow) {
+          const dev = this._resolveMacDevice(deviceIndex);
+          try {
+            return this._macFollowLoad(source, dev);
+          } catch (e) {
+            // 跟随失败 → 同设备回落普通共享（不跟随），界面标 degraded
+            const reason = e.message;
+            const name = this._devName(dev);
+            console.warn(`[audio] [mac] follow 失败，回落普通共享：dev=${dev} name="${name}" reason=${reason}`);
+            try {
+              const r = this._macSharedLoad(source, dev, { degraded: true, reason });
+              console.log(`[audio] [mac] DEGRADED follow→shared ok mode=${r.mode} ` +
+                `dev=${r.device} name="${r.deviceName}" reason=${reason}`);
+              // mode 保持 'shared'（实际就是普通共享），额外带 followFailed 让界面说清原因
+              return { ...r, mode: 'shared', degraded: true, followFailed: true, reason };
+            } catch (e2) {
+              throw new Error(`跟随采样率失败(${reason})；普通共享回落也失败(${e2.message})`);
+            }
+          }
+        }
+
         if (wantShared) {
           return this._macSharedLoad(source, this._resolveMacDevice(deviceIndex));
         }
@@ -521,8 +626,9 @@ class AudioEngine {
 
   play() {
     if (!this.chan) return { ok: false, error: '未加载' };
-    if (this.outputMode === 'hog' || this.outputMode === 'exclusive' || this.outputMode === 'shared') {
-      // macOS：普通播放流，BASS 自己往设备送（共享/独占都是）
+    if (this.outputMode === 'hog' || this.outputMode === 'exclusive' ||
+        this.outputMode === 'shared' || this.outputMode === 'follow') {
+      // macOS：普通播放流，BASS 自己往设备送（共享/跟随/独占都是）
       if (!this.BASS_ChannelPlay(this.chan, 0)) {
         return { ok: false, error: `播放失败 err=${this.BASS_ErrorGetCode()}` };
       }
@@ -540,7 +646,8 @@ class AudioEngine {
     if (!this.chan) return { ok: false, error: '未加载' };
     this.state = 'paused';
     if (this.outputMode === 'hog' || this.outputMode === 'wasapi' ||
-        this.outputMode === 'exclusive' || this.outputMode === 'shared') {
+        this.outputMode === 'exclusive' || this.outputMode === 'shared' ||
+        this.outputMode === 'follow') {
       this.BASS_ChannelPause(this.chan);
     } else {
       // ASIO 下是解码流，不能 Pause，只能停 ASIO；恢复时再 Start
@@ -552,7 +659,8 @@ class AudioEngine {
   resume() {
     if (!this.chan) return { ok: false, error: '未加载' };
     if (this.outputMode === 'hog' || this.outputMode === 'wasapi' ||
-        this.outputMode === 'exclusive' || this.outputMode === 'shared') {
+        this.outputMode === 'exclusive' || this.outputMode === 'shared' ||
+        this.outputMode === 'follow') {
       if (!this.BASS_ChannelPlay(this.chan, 0)) {
         return { ok: false, error: `恢复失败 err=${this.BASS_ErrorGetCode()}` };
       }
@@ -583,7 +691,8 @@ class AudioEngine {
   /** 释放输出设备（保留 BASS 解码器初始化） */
   _teardownOutput() {
     if ((this.outputMode === 'hog' || this.outputMode === 'wasapi' ||
-         this.outputMode === 'exclusive' || this.outputMode === 'shared') && this.chan) {
+         this.outputMode === 'exclusive' || this.outputMode === 'shared' ||
+         this.outputMode === 'follow') && this.chan) {
       try { this.BASS_ChannelPause(this.chan); } catch {}
     }
     if (this.asioReady) {
@@ -607,7 +716,19 @@ class AudioEngine {
       // macOS：不能在 asioReady 上挂 rate/bitperfect —— mac 上 this.asio 恒为 null，
       // asioReady 永远 false，那就是「rate 恒 0 / bitperfect 恒 false」的 bug 根因。
       out: !IS_WIN
-        ? (this.outputMode === 'exclusive' || this.outputMode === 'hog'
+        ? (this.outputMode === 'follow'
+            ? {
+                mode: 'follow',
+                device: this.followDev,       // -1 = 系统默认设备
+                deviceName: this.followName,
+                // follow：设备已被 FREQ 切到源采样率（不带 HOG），报设备速率
+                rate: this.followRate,
+                cpu: 0,
+                // 仍在系统混音链路里 → 不是 bit-perfect（设备速率跟上了也不等）
+                bitperfect: false,
+                degraded: this.degraded
+              }
+            : this.outputMode === 'exclusive' || this.outputMode === 'hog'
             ? {
                 mode: 'exclusive',
                 device: this.hogDev,          // -1 = 系统默认设备

@@ -36,7 +36,7 @@ const settings = Object.assign(
     // macOS 默认：CoreAudio 共享 + 系统默认设备 → 装上就有声音。
     // 老配置里的 outDevice:0 / outMode:'asio' 会在 boot() 里迁移（0 在 BASS 是 No sound）。
     ? {
-        volume: 1.0, outDevice: 'default', outMode: 'shared', outLabel: '扬声器（共享）', playMode: 'list',
+        volume: 1.0, outDevice: 'default', outMode: 'shared', outLabel: '系统默认设备 · 共享', playMode: 'list',
         exclusiveHintShown: false,   // 「独占时别的程序没声音」这句只说一次
         dismissedDevices: []         // 用户点过「忽略」的外接声卡名
       }
@@ -149,7 +149,7 @@ function connectEngine() {
           if (!IS_MAC) setStatus('LOAD FAILED: ' + m.error);   // mac 交给 macLoadFailed 说人话
           state.playing = false;
           $('#disc').classList.remove('playing');
-          if (IS_MAC) macLoadFailed(m.error);   // 设备拔了/被抢：回落「扬声器（共享）」并重试
+          if (IS_MAC) macLoadFailed(m.error);   // 设备拔了/被抢：回落「系统默认设备 · 共享」并重试
         } else {
           const f = m.info || {};
           state.outFallbackDone = false;
@@ -161,6 +161,13 @@ function connectEngine() {
             if (m.mode === 'exclusive') {
               setStatus(`独占 · ${dn} · ${(f.freq / 1000).toFixed(1)} kHz / ${f.bits} bit`);
               hintExclusiveOnce();
+            } else if (m.mode === 'follow') {
+              setStatus(`共享 · 跟随采样率 · ${(f.freq / 1000).toFixed(1)} kHz / ${f.bits} bit`);
+            } else if (m.degraded && m.followFailed) {
+              // 引擎把「跟随」失败降级成普通共享：别误报成「不支持独占」
+              setStatus('这台设备不支持跟随采样率，已自动改用普通共享');
+              showToast('这台设备不支持跟随采样率，已自动改用普通共享', [], 9000);
+              console.warn(`[out] mac follow 失败已回落共享 reason=${m.reason || '-'}`);
             } else if (m.degraded) {
               // 引擎已把独占失败降级成共享：告诉用户为什么，但不提 err 码
               setStatus('这个声卡不支持独占，已自动改用共享输出');
@@ -232,6 +239,7 @@ function showToast(text, actions = [], ms = 12000) {
 function showOutBadge(mode, devName) {
   if (!IS_MAC) return;
   if (mode === 'exclusive') setLed(true, `独占 · ${devName || '声卡'}`);
+  else if (mode === 'follow') setLed(true, '共享 · 跟随采样率');
   else setLed(true, '共享 · 系统混音');
 }
 
@@ -1737,18 +1745,22 @@ document.addEventListener('click', (e) => {
 
 /* ────────── 输出设备 ──────────
    Windows：main.html 里写死的 ASIO/WASAPI 清单（已实测，逻辑保持原样）
-   macOS  ：引擎枚举 CoreAudio 设备 → 动态生成「扬声器（共享）」+ 每台设备「（独占）」
+   macOS  ：引擎枚举 CoreAudio 设备 → 动态生成
+            「系统默认设备 · 共享」/「系统默认设备 · 共享（跟随采样率）」+ 每台设备「<名> · 独占」
 */
 let outDevice = 0;
-let outMode = 'asio';   // Windows: asio | wasapi ／ macOS: shared | exclusive
+let outMode = 'asio';   // Windows: asio | wasapi ／ macOS: shared | follow | exclusive
 let macDevices = [];    // macOS：最近一次枚举到的设备
-const OUT_DEFAULT_LABEL = '扬声器（共享）';
+const OUT_DEFAULT_LABEL = '系统默认设备 · 共享';
+const OUT_FOLLOW_LABEL = '系统默认设备 · 共享（跟随采样率）';
 // 音量：ASIO 独占下由声卡实体旋钮（或系统/功放）控制，本程序不提供软件音量
 
-/** mac：把设置里的 mode 归一成 shared | exclusive（老配置 'asio'/'hog' → exclusive） */
+/** mac：把设置里的 mode 归一成 shared | follow | exclusive
+ *  'asio' → 'exclusive'；'wasapi'/'hog'/未知值 → 'shared'（默认档，宁可有声也别静音） */
 function macMode(m) {
-  if (m === 'shared' || m === 'wasapi') return 'shared';
-  return 'exclusive';
+  if (m === 'shared' || m === 'follow' || m === 'exclusive') return m;
+  if (m === 'asio' || m === 'hog') return 'exclusive';
+  return 'shared';
 }
 /** mac：把设置里的 device 归一成 'default' 或设备索引（0 在 BASS 里是 No sound，一律当默认） */
 function macDev(v) {
@@ -1812,7 +1824,7 @@ function switchToExclusive(d) {
   outDevice = d.index;
   settings.outMode = outMode;
   settings.outDevice = outDevice;
-  settings.outLabel = `${d.name}（独占）${d.isDefault ? ' · 默认' : ''}`;
+  settings.outLabel = `${d.name} · 独占${d.isDefault ? ' · 默认' : ''}`;
   saveSettings();
   applyOutUI();
   state.outFallbackDone = false;
@@ -1837,7 +1849,7 @@ function dismissDac(d) {
 function maybeHintExternalDac() {
   if (!IS_MAC || state.dacHintChecked) return;
   state.dacHintChecked = true;
-  if (outMode !== 'shared') return;                       // 已经在独占，不打扰
+  if (outMode === 'exclusive') return;                    // 已经在独占，不打扰（shared/follow 都该提示切独占）
 
   // 内置扬声器 / 蓝牙（独占对蓝牙必失败）/ 占位设备都不提示
   // 占位名来自 CI 实测（macos-14 runner）：dev1 = "Default"、dev3 = "Null Audio Device"、
@@ -1868,7 +1880,9 @@ function requestDevices() {
   return engSend({ cmd: 'devices' });
 }
 
-/** mac：按设备清单重建 #out-menu（第一项固定「扬声器（共享）」，其后每台设备一个独占项） */
+/** mac：按设备清单重建 #out-menu（三档结构：
+ *  1「系统默认设备 · 共享」2「系统默认设备 · 共享（跟随采样率）」3 分隔线 + 每台设备「<名> · 独占」）
+ */
 function renderMacOutMenu(devices) {
   if (!IS_MAC || !outMenu) return;
   const stat = $('#out-static');
@@ -1897,6 +1911,7 @@ function renderMacOutMenu(devices) {
   };
 
   add(mk('default', 'shared', OUT_DEFAULT_LABEL));
+  add(mk('default', 'follow', OUT_FOLLOW_LABEL));
   add(sep());
   if (!macDevices.length) {
     const el = document.createElement('div');
@@ -1905,7 +1920,7 @@ function renderMacOutMenu(devices) {
     add(el);
   }
   for (const d of macDevices) {
-    add(mk(d.index, 'exclusive', `${d.name}（独占）${d.isDefault ? ' · 默认' : ''}`));
+    add(mk(d.index, 'exclusive', `${d.name} · 独占${d.isDefault ? ' · 默认' : ''}`));
   }
 
   // 旧配置迁移来的「独占 + 系统默认设备」（引擎接受 'default'，菜单项却是按索引的）：
@@ -1927,7 +1942,7 @@ function renderMacOutMenu(devices) {
 /** mac：把 outMode/outDevice 的当前值画到菜单和顶栏按钮上 */
 function applyOutUI() {
   if (!IS_MAC || !outSel || !outMenu) return '';
-  const wantMode = outMode === 'exclusive' ? 'exclusive' : 'shared';
+  const wantMode = outMode === 'exclusive' ? 'exclusive' : (outMode === 'follow' ? 'follow' : 'shared');
   const wantDev = wantMode === 'exclusive' ? String(outDevice) : 'default';
   let hit = null;
   outMenu.querySelectorAll('.out-item').forEach((x) => {
@@ -1936,20 +1951,23 @@ function applyOutUI() {
     if (on) hit = x;
   });
   const label = (hit && hit.dataset.label) ||
-    (wantMode === 'shared' ? OUT_DEFAULT_LABEL : `${(macDevices.find((d) => String(d.index) === wantDev) || {}).name || '设备'}（独占）`);
+    (wantMode === 'shared' ? OUT_DEFAULT_LABEL
+      : wantMode === 'follow' ? OUT_FOLLOW_LABEL
+      : `${(macDevices.find((d) => String(d.index) === wantDev) || {}).name || '设备'} · 独占`);
   settings.outLabel = label;
   outSel.textContent = label + ' ▾';
   return label;
 }
 
-/** mac：load 失败时回落「扬声器（共享）」并重试一次（典型场景：拔了 USB 声卡） */
+/** mac：load 失败时回落「系统默认设备 · 共享」并重试一次（典型场景：拔了 USB 声卡；
+ *  follow/独占都回落到这一档，回落目标始终是 shared） */
 function macLoadFailed(err) {
   if (!IS_MAC) return;
   const s = state.lastLoad;
   if (!s) return;
   // err 码只进 console；界面说人话
   console.warn(`[out] mac 输出失败：${err}`);
-  if (state.outFallbackDone) { setStatus('这台声卡用不了，请换一台或改用扬声器（共享）'); return; }
+  if (state.outFallbackDone) { setStatus('这台声卡用不了，请换一台或改用系统默认设备 · 共享'); return; }
   if (outMode === 'shared' && outDevice === 'default') { setStatus('播放失败，请检查输出设备或稍后重试'); return; }
 
   state.outFallbackDone = true;
@@ -1998,7 +2016,12 @@ if (outSel && outMenu) {
     else outMenu.querySelectorAll('.out-item').forEach((x) => x.classList.toggle('on', x === it));
     outSel.textContent = settings.outLabel + ' ▾';
     outMenu.hidden = true;
-    setStatus(`输出切到 ${settings.outLabel}，下一次播放生效`);
+    if (IS_MAC && outMode === 'follow') {
+      // 跟着源采样率走，意味着每次切歌都可能改设备速率 —— 说清代价
+      setStatus('已切到共享（跟随采样率），下一次播放生效；切歌可能有短暂静音');
+    } else {
+      setStatus(`输出切到 ${settings.outLabel}，下一次播放生效`);
+    }
     if (IS_MAC) console.log(`[out] mac 选择 mode=${outMode} dev=${outDevice} label=${settings.outLabel}`);
   });
 }
@@ -2420,16 +2443,20 @@ async function boot() {
   // 恢复输出设备 / 播放模式
   if (IS_MAC) {
     // 老配置（Windows 侧写的 outMode:'asio' / outDevice:0）在 mac 上要迁移：
-    //   'asio' → 'exclusive'；设备 0 → 'default'（BASS 里 0 是 No sound，会静音）
+    //   'asio' → 'exclusive'；'wasapi' → 'shared'；未知值 → 'shared'
+    //   设备 0 → 'default'（BASS 里 0 是 No sound，会静音）
     const m = macMode(settings.outMode);
-    const d = macDev(settings.outDevice);
+    // follow 只作用于系统默认设备（菜单里就这么给的），设备号一律归一成 'default'
+    const d = m === 'follow' ? 'default' : macDev(settings.outDevice);
     if (m !== settings.outMode || d !== settings.outDevice) {
       console.log(`[out] mac 迁移旧输出设置 ${settings.outMode}/${settings.outDevice} → ${m}/${d}`);
       outMode = m;
       outDevice = d;
       settings.outMode = m;
       settings.outDevice = d;
-      settings.outLabel = m === 'shared' ? OUT_DEFAULT_LABEL : (settings.outLabel || '设备（独占）');
+      settings.outLabel = m === 'shared' ? OUT_DEFAULT_LABEL
+        : m === 'follow' ? OUT_FOLLOW_LABEL
+        : (settings.outLabel || '设备 · 独占');
       saveSettings();
     } else {
       outMode = m;

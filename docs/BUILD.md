@@ -110,7 +110,15 @@ npm run dist:mac     # 出 dmg
 
 **采样率匹配的关键区别**：Windows 上是"告诉 ASIO 驱动用这个速率"，macOS 上是 `BASS_DEVICE_FREQ` 让 CoreAudio 把设备本身切过去。两者都是**设备跟随流**，不是"流被重采样"——后者的方向搞反就毁了 bit-perfect。
 
-`engine/audio.js` 里的分支靠 `IS_WIN` 判断；macOS 有 `shared`（无 HOG，走系统混音）与 `exclusive`（HOG + FREQ）两种，**默认 `shared`**（装上就有声），`exclusive` 失败自动降级。
+`engine/audio.js` 里的分支靠 `IS_WIN` 判断；macOS 有**三种**输出模式，**默认 `shared`**（装上就有声）：
+
+| 模式 | 调用 | 设备归属 | bit-perfect |
+|---|---|---|---|
+| `shared`（默认） | `BASS_Init(dev, 48000, 0)` | 系统混音器 | 否 |
+| `follow`（共享 + 跟随采样率） | `BASS_Init(dev, 源速率, **BASS_DEVICE_FREQ**)`（**无 HOG**） | 系统混音器 | 否（仍有混音） |
+| `exclusive`（独占） | `BASS_Init(dev, 源速率, **HOG \| FREQ**)` | 独占 | 是（速率相符时） |
+
+`exclusive` 失败 → 回落 `shared`；`follow` 初始化失败 → 回落 `shared`。Windows 上 `follow` 等价 `wasapi` 共享（`wantShared` 里包含它），Windows 分支逻辑不变。
 
 ### 依赖与文件
 
@@ -136,7 +144,7 @@ npm run dist:mac     # 出 dmg
 
 ### 已知未处理
 
-- **设备选择菜单** → 已修（2026-10-23）：mac 用 `BASS_GetDeviceInfo` 动态枚举，首项「扬声器（共享）」，其后每台「<名>（独占）」
+- **设备选择菜单** → 已修（2026-10-23）：mac 用 `BASS_GetDeviceInfo` 动态枚举，前两项固定「系统默认设备 · 共享」/「系统默认设备 · 共享（跟随采样率）」，分隔线后每台「<名> · 独占」
 - **`ffprobe`**：mac 上需要 `brew install ffmpeg`，否则本地库没有时长/位深
 - **`BASS_DEVICE_HOG` 需要设备支持** → 已处理：拒绝时自动降级到共享并在界面提示
 

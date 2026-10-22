@@ -8,7 +8,7 @@
 ## 一句话现状
 
 Windows 版**已完成并发布**（v0.1.0，实测可用）。
-macOS 版已完成「开箱即用」改造：默认共享输出（装上就有声）、动态设备菜单（扬声器共享 / 声卡独占）、独占失败自动回落、外接声卡提示。
+macOS 版已完成「开箱即用」改造：默认共享输出（装上就有声）、动态设备菜单（共享 / 共享·跟随采样率 / 声卡独占 三档）、独占与 follow 失败自动回落、外接声卡提示。
 **仍未在真机运行过**——改造只做到静态正确 + Windows 回归通过，见下面「仍未验证」。
 
 mac 打包只出 **arm64 单包**（朋友是 M 系）。要出 Intel 版改 `package.json` 的 `build.mac.target.arch` 即可。
@@ -86,7 +86,7 @@ git tag v0.1.1 && git push origin v0.1.1     # tag 自动触发打包 + 创建 R
 |---|---|---|---|
 | 1 | 默认 `outDevice: 0` | `app/renderer/js/app.js` settings | mac 默认 `{outMode:'shared', outDevice:'default'}`，boot 迁移旧值 |
 | 2 | 设备 0 在 BASS 里是「No sound」 | `engine/audio.js` `_resolveMacDevice` | `'default'`/0/非法值一律 → **-1**（BASS 惯用法＝系统默认设备），0 显式拦下 |
-| 3 | `#out-menu` 写死 Windows 设备 | `main.html` + `renderMacOutMenu` | mac 动态生成：首项「扬声器（共享）」，其后每台设备「<名>（独占）」 |
+| 3 | `#out-menu` 写死 Windows 设备 | `main.html` + `renderMacOutMenu` | mac 动态生成三档：「系统默认设备 · 共享」/「系统默认设备 · 共享（跟随采样率）」/ 分隔线 + 每台设备「<名> · 独占」 |
 | 4 | hog 被拒直接抛错 | `load()` | 独占失败 → 同设备改共享重试，返回 `degraded:true`，界面说人话 |
 
 其他改动：
@@ -97,7 +97,10 @@ git tag v0.1.1 && git push origin v0.1.1     # tag 自动触发打包 + 创建 R
 - `snapshot().out`：mac 独占报 `hogRate` + `bitperfect=(hogRate===info.freq)`；共享报 `info.freq`、`bitperfect=false`
 - 独占可见性：LED 显示「独占 · 设备名」，首次独占一次性提示「其他程序暂时没声音是正常的」
 - 外接声卡提示（**B 方案，不自动切**）：启动后检测到非内置/非蓝牙设备 → toast「检测到 X，要切到独占吗？」→「切换」/「忽略」（记住已忽略的设备名，换新声卡仍提示）
-- 拔声卡 / 独占失败 → 自动回落「扬声器（共享）」并重试一次
+- 拔声卡 / 独占失败 / follow 初始化失败 → 自动回落「系统默认设备 · 共享」并重试一次
+- **第三种输出模式 `follow`**（新增，mac 菜单第二项「系统默认设备 · 共享（跟随采样率）」）：共享（不带 HOG，仍经系统混音）+ `BASS_DEVICE_FREQ`，让**设备**跟着源采样率走，而不是让流被重采样；`snapshot().out` 报 `mode:'follow'`、`rate:followRate`、`bitperfect:false`。设备/速率没变时只换流（命中缓存不重开设备）
+  - **代价（必须写进说明/告诉用户）**：每切到采样率不同的歌都要改一次设备速率，CoreAudio 会重建 IO —— **其他 App 正在播放的声音会被打断（短暂静音）**；因为仍在系统混音链路里，它不等于 bit-perfect（要 bit-perfect 只有独占）
+  - 初始化失败（设备被抢/不支持该速率）→ 自动回落普通共享，返回 `degraded:true` + `followFailed:true`，界面说「不支持跟随采样率，已改用普通共享」
 - 托盘：mac `setTemplateImage(true)`（只取 alpha，变单色剪影）
 - 退出：`before-quit` 发 `shutdown`（引擎 `BASS_Free` 释放 hog），`will-quit` 强杀兜底孤儿进程
 - 打包只出 arm64 单包
@@ -133,10 +136,10 @@ BASS_Init(1, 48000, HOG|FREQ) = OK
 
 1. 打开应用**直接有声音**（默认共享，不用动任何设置）
 2. 设备菜单列出 CoreAudio 设备（名字不乱码、默认设备带「· 默认」）
-3. 切「<USB DAC>（独占）」→ 出声；「音频 MIDI 设置」里该 DAC 被独占
-4. 44.1k / 48k / 96k 各播一次 → `snapshot().out.rate` 等于源采样率、`bitperfect: true`
+3. 切「<USB DAC> · 独占」→ 出声；「音频 MIDI 设置」里该 DAC 被独占
+4. 44.1k / 48k / 96k 各播一次 → `snapshot().out.rate` 等于源采样率、`bitperfect: true`；再切「系统默认设备 · 共享（跟随采样率）」各播一次 → `rate` 跟着变、`bitperfect: false`，同时开着别的播放器确认它会因设备改速率被打断
 5. 独占时切到采样率不同的下一首（会有 0.2–0.5s 静默，属正常）
-6. 拔 USB DAC → 自动回「扬声器（共享）」，有提示，不断音
+6. 拔 USB DAC → 自动回「系统默认设备 · 共享」，有提示，不断音
 7. 退出应用 → 整机声音恢复正常（hog 已释放）
 8. 插 USB DAC 启动 → 出现「检测到 X，要切到独占吗？」；点切换生效、点忽略不再提示
 9. 蓝牙耳机 → 不出现独占提示；手动选独占应自动降级到共享
