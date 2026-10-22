@@ -303,6 +303,10 @@ C:\Users\tianz\Program\yu-wuwang\
 | **M4 界面** | 设计稿落地：主页/搜索/歌单/播放页 + 开机画面 | 截图与设计稿一致 |
 | **M5 打磨** | 歌词滚动、媒体键、托盘、每日推荐、体检 | 全判据绿 |
 | **M6 Mac** | 跨平台构建 + 朋友实测 | 能出声（不承诺 bit-perfect） |
+| **M7 发布** | GitHub Actions 双平台打包 + Release | ✅ [v0.1.0](https://github.com/TG-xian/yu-wuwang/releases/tag/v0.1.0) 已发布 |
+
+> **当前进度与待办见 [HANDOFF.md](HANDOFF.md)**（这份是稳定架构，那份是易变状态）。
+> Windows 已完整可用；macOS 代码就绪、CI 能出 dmg，但**未在真机运行过**，且设备选择菜单在 mac 上会导致静音。
 
 ---
 
