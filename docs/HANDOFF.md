@@ -105,9 +105,17 @@ git tag v0.1.1 && git push origin v0.1.1     # tag 自动触发打包 + 创建 R
 - 退出：`before-quit` 发 `shutdown`（引擎 `BASS_Free` 释放 hog），`will-quit` 强杀兜底孤儿进程
 - 打包只出 arm64 单包
 
-### CI 真机上已经验证过的（2026-10-23，macos-14 arm64 / macOS 14.8.9）
+### CI 真机上已经验证过的（2026-10-23）
 
-`tools/probe-mac-bass.js` + `.github/workflows/mac-probe.yml` 在**真实 darwin** 上跑过一次，实测输出：
+`tools/probe-mac-bass.js` + `.github/workflows/mac-probe.yml` 在 **GitHub 托管的 macOS 虚拟机**（Apple Silicon）上跑过，**三代系统全部通过**：
+
+| runner | 系统 | arch |
+|---|---|---|
+| macos-14 | macOS 14.8.9 | arm64 |
+| macos-15 | macOS 15.7.9 | arm64 |
+| macos-26 | macOS 26.6.2 | arm64 |
+
+每代实测输出一致：
 
 ```
 koffi.load(libbass.dylib) = OK           ← 打包进包 ≠ 运行时可加载，这条最关键
