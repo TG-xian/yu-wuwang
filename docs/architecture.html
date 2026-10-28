@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>豫 · 无妄 — 系统架构</title>
+<style>
+:root{color-scheme:dark;--gold:#c9a227;--text:#b8b8be;--muted:#7a7a82;--white:#f0f0f2;--bili:#a3bbb3}
+*{box-sizing:border-box}body{margin:0;background:#0a0a0c;color:var(--text);font-family:"JetBrains Mono","Cascadia Mono",Consolas,"Microsoft YaHei",monospace,sans-serif}.page{max-width:1520px;margin:auto;padding:40px 40px 32px}header{border-left:3px solid var(--gold);padding-left:20px}header small{color:var(--gold);letter-spacing:3px;font-size:10px}h1{color:var(--white);font-size:28px;font-weight:500;margin:10px 0}header p{font-size:12px;color:var(--muted);margin:0;line-height:1.8}.diagram{margin:24px 0 20px;overflow:auto;border:1px solid #242421;border-radius:12px}svg{display:block;width:100%;min-width:1000px;height:auto}svg text{font-family:"JetBrains Mono","Cascadia Mono",Consolas,"Microsoft YaHei",monospace,sans-serif;fill:#b8b8be;font-size:12px}.group{fill:rgba(201,162,39,.05);stroke:rgba(201,162,39,.28);stroke-dasharray:6 4;rx:12}.base{fill:#0f0f12;rx:6}.node{fill:rgba(201,162,39,.055);stroke:#6e5b23;stroke-width:1.5;rx:6}.bnode{fill:rgba(163,187,179,.055);stroke:#6b8279;stroke-width:1.5;rx:6}.name{fill:#f0f0f2;font-size:12px}.sub{font-size:10.5px}.note{font-size:9.5px;fill:#8a8a92}.gold{fill:#c9a227}.bili{fill:#a3bbb3}.label{font-size:10px;fill:#c9a227;letter-spacing:1px}.flow{fill:none;stroke:#c9a227;stroke-width:2;marker-end:url(#gold-arrow)}.bflow{fill:none;stroke:#a3bbb3;stroke-width:2;marker-end:url(#bili-arrow)}.control{fill:none;stroke:#7a7a82;stroke-width:1;stroke-dasharray:4 4;marker-end:url(#gray-arrow)}.lyric{fill:none;stroke:#7a7a82;stroke-width:1;marker-end:url(#gray-arrow)}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.cards article{background:#0f0f12;border:1px solid #37301b;border-radius:6px;padding:20px}.cards small{color:var(--gold);font-size:10px}.cards h2{font-size:14px;color:var(--white);font-weight:500;margin:10px 0}.cards p{font-size:11px;line-height:1.9;margin:0;color:var(--text)}@media(max-width:700px){.page{padding:24px 16px}.cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body><main class="page">
+<header><small>YU · WUWANG / SYSTEM ARCHITECTURE</small><h1>豫 · 无妄</h1><p>从在线音源到 ASIO 独占输出：三进程协作、两条播放链路、源采样率直通。</p></header>
+<div class="diagram">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 760" role="img" aria-labelledby="diagram-title diagram-desc">
+<title id="diagram-title">豫·无妄播放器系统架构与音频数据流</title>
+<desc id="diagram-desc">左侧网易云与 B 站音源。渲染层通过 IPC 连接主进程。主进程拉起网易云取流服务和引擎两个子进程。网易云直链由引擎流式播放不落盘；B 站 DASH 音频先下载到 userData/bili-cache，再由引擎播放文件。引擎使用 BASS 解码，经 ASIO 独占输出到声卡。主进程查询网易云歌词和 LRCLIB，双源打分匹配后回传渲染层。</desc>
+<defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#17171b" stroke-width=".5"/></pattern><marker id="gold-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#c9a227"/></marker><marker id="bili-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#a3bbb3"/></marker><marker id="gray-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#7a7a82"/></marker></defs>
+<rect width="1440" height="900" fill="#0a0a0c"/><rect width="1440" height="900" fill="url(#grid)"/>
+<!-- Group backgrounds precede connectors; all connectors precede node cards. -->
+<rect class="group" x="24" y="190" width="246" height="410"/><rect class="group" x="300" y="55" width="290" height="180"/><rect class="group" x="300" y="285" width="290" height="315"/><rect class="group" x="620" y="190" width="270" height="190"/><rect class="group" x="620" y="420" width="270" height="180"/><rect class="group" x="930" y="190" width="260" height="490"/><rect class="group" x="1220" y="330" width="196" height="350"/><rect class="group" x="300" y="640" width="590" height="100"/>
+<!-- Control plane and lifecycle -->
+<path class="control" d="M445 205V325"/><path class="control" d="M560 350H605V335H645"/><path class="control" d="M560 375H605V165H1060V235"/><path class="control" d="M560 135H1130V235"/>
+<!-- Netease requests and streaming URL -->
+<path class="flow" d="M560 325H600V290H645"/><path class="flow" d="M700 235V180H147V240"/><path class="flow" d="M245 275H645"/><path class="flow" d="M865 275H950"/>
+<!-- Bilibili direct request, download and file playback -->
+<path class="bflow" d="M330 440H245"/><path class="bflow" d="M147 530V575H755V550"/><path class="bflow" d="M865 500H950"/>
+<!-- Decode and output -->
+<path class="flow" d="M1060 325V365"/><path class="bflow" d="M1060 465V425"/><path class="flow" d="M1170 395H1240"/><path class="flow" d="M1318 445V515"/>
+<!-- Lyrics: main -> providers -> renderer -->
+<path class="lyric" d="M445 560V680H485"/><path class="lyric" d="M645 680H910V110H560"/>
+<!-- External source nodes -->
+<text class="label" x="44" y="216">01 / 音源</text>
+<rect class="base" x="45" y="240" width="200" height="90"/><rect class="node" x="45" y="240" width="200" height="90"/><text class="name" x="61" y="264">网易云 · cloudmusic API</text><text class="sub" x="61" y="286">返回音频直链 URL</text><text class="note" x="61" y="310">在线音源 / 不写入本地音频缓存</text>
+<rect class="base" x="45" y="400" width="200" height="130"/><rect class="bnode" x="45" y="400" width="200" height="130"/><text class="name" x="61" y="425">B 站 · api.bilibili.com</text><text class="sub bili" x="61" y="449">playurl → DASH 音频</text><text class="sub" x="61" y="470">fnval=4048</text><text class="sub" x="61" y="489">qualityId 30251 / Hi-Res</text><text class="note" x="61" y="513">最高音质：30251</text>
+<!-- Renderer -->
+<text class="label" x="320" y="82">02 / 渲染层 · RENDERER</text><rect class="base" x="330" y="100" width="230" height="105"/><rect class="node" x="330" y="100" width="230" height="105"/><text class="name" x="346" y="125">UI / 播放控制</text><text class="sub" x="346" y="149">发现 / 搜索 / 本地</text><text class="sub" x="346" y="169">B 站推荐 / B 站榜单 / 播放页</text><text class="note" x="346" y="190">歌词呈现与播放状态</text>
+<!-- Main -->
+<text class="label" x="320" y="312">03 / 主进程 · MAIN</text><rect class="base" x="330" y="325" width="230" height="235"/><rect class="node" x="330" y="325" width="230" height="235"/><text class="name" x="346" y="352">Electron Main</text><text class="sub" x="346" y="380">窗口 / IPC / 托盘</text><text class="sub" x="346" y="402">拉起引擎 + 取流服务两个子进程</text><text class="sub bili" x="346" y="440">B 站直连请求</text><text class="sub" x="346" y="461">Referer + User-Agent</text><text class="sub" x="346" y="482">搜索：WBI 签名</text><text class="sub" x="346" y="516">缓存管理 / 歌词双源匹配</text><text class="note" x="346" y="541">音频数据由引擎解码与输出</text>
+<!-- Service -->
+<text class="label" x="640" y="216">04 / 取流服务子进程</text><rect class="base" x="645" y="235" width="220" height="115"/><rect class="node" x="645" y="235" width="220" height="115"/><text class="name" x="660" y="260">NeteaseCloudMusicApi</text><text class="sub" x="660" y="283">HTTP 127.0.0.1:3000</text><text class="sub gold" x="660" y="307">向 cloudmusic API 获取直链</text><text class="note" x="660" y="332">直链交给引擎，不下载音频文件</text>
+<!-- Disk -->
+<text class="label" x="640" y="446">05 / 主进程管理的磁盘缓存</text><rect class="base" x="645" y="465" width="220" height="85"/><rect class="bnode" x="645" y="465" width="220" height="85"/><text class="name" x="660" y="490">userData/bili-cache</text><text class="sub bili" x="660" y="513">DASH 下载完成 → 本地文件</text><text class="note" x="660" y="535">deadline 120min</text>
+<!-- Engine -->
+<text class="label" x="950" y="216">06 / 引擎子进程 · engine/</text><rect class="base" x="950" y="235" width="220" height="90"/><rect class="node" x="950" y="235" width="220" height="90"/><text class="name" x="965" y="260">BASS_StreamCreateURL</text><text class="sub gold" x="965" y="283">网易云直链 → 流式播放</text><text class="sub" x="965" y="306">不落盘</text>
+<rect class="base" x="950" y="365" width="220" height="60"/><rect class="node" x="950" y="365" width="220" height="60"/><text class="name" x="965" y="390">BASS 解码</text><text class="sub" x="965" y="411">统一音频输出链路</text>
+<rect class="base" x="950" y="465" width="220" height="90"/><rect class="bnode" x="950" y="465" width="220" height="90"/><text class="name" x="965" y="490">BASS_StreamCreateFile</text><text class="sub bili" x="965" y="513">B 站缓存 → 文件播放</text><text class="sub" x="965" y="536">读取已下载的本地音频</text><text class="sub" x="950" y="601">WebSocket :47800</text><text class="note" x="950" y="624">播放指令 / 状态通道</text><text class="note" x="950" y="647">URL 与 File 两种入口，共用 BASS</text>
+<!-- Output -->
+<text class="label" x="1240" y="356">07 / 音频输出</text><rect class="base" x="1240" y="375" width="156" height="70"/><rect class="node" x="1240" y="375" width="156" height="70"/><text class="name" x="1255" y="402">ASIO 独占</text><text class="sub gold" x="1255" y="426">源采样率匹配</text><rect class="base" x="1240" y="515" width="156" height="60"/><rect class="node" x="1240" y="515" width="156" height="60"/><text class="name" x="1255" y="540">声卡 / DAC</text><text class="sub" x="1255" y="560">硬件输出</text><text class="sub gold" x="1240" y="607">不重采样</text><text class="sub" x="1240" y="629">44.1k / 48k</text><text class="sub" x="1240" y="647">96k / 192k 直通</text>
+<!-- Secondary lyric provider -->
+<text class="label" x="320" y="666">08 / 歌词辅助链路</text><rect class="base" x="485" y="660" width="160" height="60"/><rect class="node" x="485" y="660" width="160" height="60"/><text class="name" x="500" y="685">网易云歌词 / LRCLIB</text><text class="sub" x="500" y="705">双源打分匹配</text><text class="note" x="665" y="706">匹配结果回传 Renderer</text>
+<!-- Edge labels occupy open gutters -->
+<text class="sub" x="457" y="258">IPC</text><text class="note" x="665" y="126">WS 47800 · 播放控制 / 状态</text><text class="note" x="615" y="157">Main 拉起两个子进程</text><text class="sub gold" x="295" y="267">音频直链 URL →</text><text class="note gold" x="867" y="259">直链</text><text class="note bili" x="252" y="425">直连</text><text class="sub bili" x="275" y="568">下载 DASH 音频 → 写入缓存</text><text class="note bili" x="893" y="486">文件</text><text class="note" x="334" y="625">查询歌词</text>
+<!-- Legend is outside all groups, 40px below the lowest group. -->
+<path d="M45 787H85" stroke="#c9a227" stroke-width="2"/><text class="sub" x="97" y="791">网易云：直链流式 / 不落盘</text><path d="M380 787H420" stroke="#a3bbb3" stroke-width="2"/><text class="sub" x="432" y="791">B 站：下载缓存 / 文件播放</text><path d="M745 787H785" stroke="#7a7a82" stroke-dasharray="4 4"/><text class="sub" x="797" y="791">IPC / 子进程启动 / WebSocket</text><path d="M1115 787H1155" stroke="#7a7a82"/><text class="sub" x="1167" y="791">歌词辅助链路</text>
+<text class="sub bili" x="45" y="829">B 站为何要落盘？</text><text class="sub" x="45" y="850">DASH 的 fMP4 让 BASS_StreamCreateURL 报 err=41；因此先下载到 bili-cache，再用 BASS_StreamCreateFile 播放。</text><text class="note" x="45" y="879">阅读方向：左侧音源 → 中间服务 / 缓存 → 右侧引擎 → ASIO 独占 → 声卡</text>
+</svg></div>
+<section class="cards" aria-label="架构摘要"><article><small>01 / PROCESS MODEL</small><h2>三进程模型</h2><p>Main 管理窗口、IPC、托盘及缓存，并拉起 engine/ 与 NeteaseCloudMusicApi 两个子进程。Renderer 承载 UI，通过 IPC 与主进程协作，通过 WS 47800 连接引擎。</p></article><article><small>02 / SOURCE ROUTING</small><h2>两条音源链路</h2><p>网易云经本地 3000 端口取流服务获取直链，直接流式播放，不落盘。B 站由 Main 直连获取 DASH，下载到 userData/bili-cache 后播放文件，避开 fMP4 的 err=41。</p></article><article><small>03 / EXCLUSIVE OUTPUT</small><h2>直通不重采样</h2><p>两种入口汇入 BASS 解码，经 ASIO 独占输出到声卡。按音源匹配采样率，44.1k / 48k / 96k / 192k 直通，不重采样。</p></article></section>
+</main></body></html>

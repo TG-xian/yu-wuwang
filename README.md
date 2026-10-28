@@ -56,6 +56,19 @@
 
 ![UP 主主页](docs/screenshots/04-up-page.png)
 
+## 架构
+
+![系统架构](docs/screenshots/00-architecture.png)
+
+三个进程各管一段，两条音源链路在引擎处汇合：
+
+- **渲染层**只管界面；**主进程**管窗口、IPC、托盘，并拉起两个子进程；**引擎子进程**独占 BASS + ASIO。
+- **网易云**走本地 `127.0.0.1:3000` 取流服务拿直链，`BASS_StreamCreateURL` 流式播放，**不落盘**。
+- **B 站**由主进程直连 `api.bilibili.com`（带 Referer + UA，搜索走 WBI 签名），DASH 音频
+  **先下载到 `userData/bili-cache`** 再 `BASS_StreamCreateFile` 播放——因为 fMP4 会让
+  `StreamCreateURL` 报 `err=41`，这是绕开它的唯一稳法。
+- 两条链路在**同一个 BASS 解码**处汇合，按源采样率直通 ASIO，全程不重采样。
+
 ## 平台
 
 | 平台 | 状态 | 独占方式 |
