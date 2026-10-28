@@ -1,0 +1,36 @@
+BASS 音频库 — 第三方组件说明
+=====================================
+
+本目录下的二进制文件由 un4seen developments 提供，版权归其所有：
+
+  win32-x64/bass.dll           BASS 核心（音频解码/输出）
+  win32-x64/bassasio.dll       ASIO 输出插件
+  win32-x64/bassflac.dll       FLAC 解码插件
+  win32-x64/basswasapi.dll     WASAPI 输出插件
+  darwin/libbass.dylib         BASS 核心（macOS）
+  darwin/libbassflac.dylib     FLAC 解码插件（macOS）
+
+官方网站：https://www.un4seen.com/
+
+
+授权要点
+--------
+
+1. BASS 对**个人非商业用途免费**。
+2. **商业用途需要购买授权**（详见 un4seen 官网的价格页）。
+3. 不得修改、反编译或逆向工程这些二进制文件。
+4. 再分发时必须保留本说明与 un4seen 的版权声明。
+5. 这些文件**不能单独分发**，只能作为本应用的一部分提供。
+
+本项目的自有代码以 MIT 许可证发布（见仓库根目录 LICENSE），
+但 **MIT 不适用于本目录下的任何二进制文件**。
+
+
+为什么仓库里带着这些文件
+------------------------
+
+播放器需要 BASS 才能出声（ASIO 独占、源采样率直通都依赖它）。
+为了 clone 下来就能直接 `npm run dev`，这些文件随仓库提供。
+
+如果你要把它用于商业场景，请自行向 un4seen 购买授权；
+或者从仓库中移除 native/ 并改用其他音频后端。
