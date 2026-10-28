@@ -196,15 +196,35 @@ function createTray(win) {
     try { win.webContents.send('tray-cmd', cmd); } catch {}
   };
 
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '显示主界面', click: () => { win.show(); win.focus(); } },
-    { type: 'separator' },
-    { label: '播放 / 暂停', click: () => send('toggle') },
-    { label: '上一曲', click: () => send('prev') },
-    { label: '下一曲', click: () => send('next') },
-    { type: 'separator' },
-    { label: '退出', click: () => { app.isQuitting = true; app.quit(); } },
-  ]));
+  // 托盘菜单可重建：清空缓存后要刷新占用显示
+  tray.buildMenu = () => {
+    let cs = { count: 0, bytes: 0 };
+    try { cs = bili.cacheStats(); } catch {}
+    const mb = (cs.bytes / 1048576).toFixed(0);
+    console.log(`[tray] 菜单重建 · B 站缓存 ${cs.count} 个 ${mb}MB`);
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: '显示主界面', click: () => { win.show(); win.focus(); } },
+      { type: 'separator' },
+      { label: '播放 / 暂停', click: () => send('toggle') },
+      { label: '上一曲', click: () => send('prev') },
+      { label: '下一曲', click: () => send('next') },
+      { type: 'separator' },
+      { label: `B 站缓存：${cs.count} 个 · ${mb} MB`, enabled: false },
+      {
+        label: '清空 B 站缓存',
+        enabled: cs.count > 0,
+        click: () => {
+          let r = { removed: 0 };
+          try { r = bili.pruneCache({ maxBytes: 0 }); } catch (e) { console.warn('[bili] 清空缓存失败:', e.message); }
+          console.log(`[bili] 手动清空缓存：删 ${r.removed} 个`);
+          tray.buildMenu();
+        },
+      },
+      { type: 'separator' },
+      { label: '退出', click: () => { app.isQuitting = true; app.quit(); } },
+    ]));
+  };
+  tray.buildMenu();
 
   tray.on('click', () => {
     if (win.isVisible() && !win.isMinimized()) win.hide();

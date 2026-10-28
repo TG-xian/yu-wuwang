@@ -587,6 +587,22 @@ async function downloadAudio(bvid, { sessdata = '', cid = 0, page = 1, force = f
 }
 
 /** 先删超龄的，再按总大小从最旧的删；残留 .part 超过 10 分钟一并清掉 */
+/** 缓存现状：给托盘菜单显示占用，只统计不修改 */
+function cacheStats() {
+  let dir;
+  try { dir = cacheDir(); } catch { return { count: 0, bytes: 0 }; }
+  let count = 0, bytes = 0;
+  try {
+    for (const n of fs.readdirSync(dir)) {
+      try {
+        const st = fs.statSync(path.join(dir, n));
+        if (st.isFile() && !n.endsWith('.part')) { count++; bytes += st.size; }
+      } catch {}
+    }
+  } catch {}
+  return { count, bytes };
+}
+
 // 2GB：Hi-Res 单首约 84MB，800MB 只装得下约 10 首，对听 Hi-Res 的人不够用
 function pruneCache({ maxBytes = 2048 * 1024 * 1024, maxAgeDays = 7 } = {}) {
   let dir;
@@ -759,7 +775,7 @@ function clearSession() {
 
 module.exports = {
   UA, REFERER, QUALITY_LABEL, DEADLINE_MARGIN,
-  getBuvid, parseInput, parsePage, getInfo, getPlayUrl, toEngineSource, downloadAudio, pruneCache, ranking, recommendRegion,
+  getBuvid, parseInput, parsePage, getInfo, getPlayUrl, toEngineSource, downloadAudio, pruneCache, cacheStats, ranking, recommendRegion,
   getWbiKeys, invalidateWbi, wbiSign, searchVideo, searchUser,
   userVideos, userProfile, userSeasons, seasonInfo,
   qrGenerate, qrPoll, nav,
