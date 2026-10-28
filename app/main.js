@@ -270,6 +270,12 @@ app.whenReady().then(async () => {
   createWindow();
   startEngine();
   setTimeout(() => connectWithRetry(), 500);
+  try {
+    const r = bili.pruneCache();
+    console.log(`[bili] 缓存清理：删 ${r.removed} 个，剩 ${r.kept} 个 ${(r.bytes / 1048576).toFixed(0)}MB`);
+  } catch (e) {
+    console.warn('[bili] 缓存清理失败:', e.message);
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -590,6 +596,96 @@ ipcMain.handle('api:cookie', () => {
     return '';
   }
 });
+
+/* ────────── B 站音源 ──────────
+   接口全在主进程发：要带 Referer，且渲染层 CSP 只放行本机端口。
+   SESSDATA 只在主进程内流转，渲染层拿不到明文。 */
+const bili = require('./bili/api.js');
+
+/** 统一包一层：错误转成 { ok:false } 回渲染层，避免 invoke 抛出的错误信息被 Electron 改写 */
+function biliHandle(channel, fn) {
+  ipcMain.handle(channel, async (_e, ...args) => {
+    try {
+      return { ok: true, data: await fn(...args) };
+    } catch (e) {
+      console.warn(`[bili] ${channel} 失败 [${e.code || '-'}] ${e.message}`);
+      return { ok: false, code: e.code || '', error: e.message };
+    }
+  });
+}
+
+const biliSessdata = () => (bili.loadSession() || {}).SESSDATA || '';
+
+biliHandle('bili:ranking', () => bili.ranking());
+biliHandle('bili:user-videos', ({ mid, page } = {}) => bili.userVideos(mid, { page }));
+biliHandle('bili:user-profile', ({ mid } = {}) => bili.userProfile(mid));
+biliHandle('bili:season', ({ bvid } = {}) => bili.seasonInfo(bvid));
+biliHandle('bili:recommend', ({ count } = {}) => bili.recommendRegion({ count }));
+
+biliHandle('bili:search-video', ({ keyword, page } = {}) => bili.searchVideo(keyword, { page }));
+biliHandle('bili:search-user', ({ keyword, page } = {}) => bili.searchUser(keyword, { page }));
+
+/** 收原始输入（BV 号或链接），顺带解析 ?p= */
+biliHandle('bili:info', async (input) => {
+  const bvid = bili.parseInput(input);
+  if (!bvid) throw Object.assign(new Error('没认出 BV 号，请粘贴 BV 号或视频链接'), { code: 'BAD_INPUT' });
+  const info = await bili.getInfo(bvid);
+  return { ...info, page: bili.parsePage(input) };
+});
+
+/** 下载到本地缓存后返回文件路径：BASS 直接开 B 站 URL 约四成报 err=41，本地文件没问题 */
+biliHandle('bili:playurl', async ({ bvid, cid, page, force } = {}) => {
+  const t0 = Date.now();
+  const d = await bili.downloadAudio(bvid, { sessdata: biliSessdata(), cid, page, force: !!force });
+  console.log(`[bili] 取流 ${bvid} cid=${d.cid} 档位=${d.qualityId} ${(d.bytes / 1048576).toFixed(1)}MB `
+    + `${d.fromCache ? '命中缓存' : `下载 ${Date.now() - t0}ms`}`);
+  return d;
+});
+
+/** 歌词匹配：网易云 + LRCLIB 打分选优；匹配不到是正常结果（data.ok=false），不算 IPC 失败 */
+const biliLyrics = require('./bili/lyrics.js');
+biliHandle('bili:lyrics', async ({ bvid, page, title, artist, durationSec } = {}) => {
+  const t0 = Date.now();
+  const r = await biliLyrics.match({ bvid, page, title, artist, durationSec });
+  console.log(r.ok
+    ? `[bili] 歌词 ${bvid} → ${r.source}「${r.songTitle}」${r.songArtist} 分数=${r.score} ${r.fromCache ? '命中缓存' : `${Date.now() - t0}ms`}`
+    : `[bili] 歌词 ${bvid} 未匹配：${r.reason}`);
+  return r;
+});
+
+biliHandle('bili:qr-generate', () => bili.qrGenerate());
+
+/** 成功时在主进程直接存盘，cookie 不回传渲染层 */
+biliHandle('bili:qr-poll', async (key) => {
+  const r = await bili.qrPoll(key);
+  if (r.status !== 'ok') return r;
+  const saved = bili.saveSession(r.cookie);
+  console.log(`[bili] 扫码登录成功 persisted=${saved.persisted}${saved.error ? ' · ' + saved.error : ''}`);
+  return { status: 'ok', persisted: saved.persisted, note: saved.error || '' };
+});
+
+biliHandle('bili:session-get', async () => {
+  const sess = bili.loadSession();
+  if (!sess || !sess.SESSDATA) return { loggedIn: false, hasSessdata: false };
+  try {
+    const n = await bili.nav(sess.SESSDATA);
+    return { loggedIn: n.isLogin, hasSessdata: true, member: n.vip, uname: n.uname };
+  } catch {
+    // 网络失败不等于登出：保留登录态，只是会员信息未知
+    return { loggedIn: true, hasSessdata: true, member: null };
+  }
+});
+
+/** 手动粘贴的兜底：允许整段 cookie 或只有值 */
+biliHandle('bili:session-save', (text) => {
+  const s = String(text || '').trim();
+  const m = s.match(/SESSDATA=([^;\s]+)/);
+  const r = bili.saveSession({ SESSDATA: m ? m[1] : s });
+  if (!r.ok) throw Object.assign(new Error(r.error), { code: 'BAD_SESSDATA' });
+  return r;
+});
+
+biliHandle('bili:session-clear', () => bili.clearSession());
 
 ipcMain.handle('engine:status', () => ({
   connected: !!engineWs,

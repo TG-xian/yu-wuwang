@@ -42,10 +42,14 @@
   <div class="shell">
     <!-- 侧栏 -->
     <nav class="sidebar" id="sidebar">
-      <div class="nav-g">在线</div>
+      <div class="nav-g">网易云</div>
       <button class="nav-i on" data-view="home">发现音乐</button>
       <button class="nav-i" data-view="daily">每日推荐</button>
       <button class="nav-i" data-view="radio">私人漫游</button>
+      <div class="nav-sep"></div>
+      <div class="nav-g">B 站</div>
+      <button class="nav-i" data-view="bili-recommend">推荐</button>
+      <button class="nav-i" data-view="bili-rank">榜单</button>
       <div class="nav-sep"></div>
       <div class="nav-g">我的</div>
       <button class="nav-i" data-view="liked">我喜欢的音乐</button>
@@ -92,13 +96,64 @@
       <section class="view" data-page="search">
         <div class="page-t" style="font-size:26px;">搜<em>·</em>索</div>
         <div class="page-sub" id="search-sub">输入关键词后回车</div>
-        <div class="search-tabs" id="search-tabs">
+        <!-- 来源：全部 / 网易云 / B 站；下面两排子 tab 按来源显示其一 -->
+        <div class="src-tabs" id="search-src">
+          <button data-src="all" class="on">全部</button>
+          <button data-src="ne">网易云</button>
+          <button data-src="bili">B 站</button>
+        </div>
+        <div class="search-tabs" id="search-tabs" hidden>
           <button data-tab="songs" class="on">单曲</button>
           <button data-tab="artists">歌手</button>
           <button data-tab="albums">专辑</button>
           <button data-tab="playlists">歌单</button>
         </div>
-        <div id="search-list"><div class="empty">搜索曲目、歌手、专辑、歌单</div></div>
+        <div class="search-tabs" id="bili-search-tabs" hidden>
+          <button data-btab="video" class="on">曲目</button>
+          <button data-btab="user">UP 主</button>
+        </div>
+        <div id="search-list"><div class="empty">搜索网易云 / B 站的曲目、歌手、UP 主</div></div>
+      </section>
+
+      <!-- B 站 · 推荐（页头由 bili.js 挂进 .bili-head-slot，两页共用一份） -->
+      <section class="view" data-page="bili-recommend">
+        <div class="bili-head-slot"></div>
+        <div class="bili-search">
+          <input id="bili-q" class="search-box" placeholder="粘贴 BV 号或视频链接，回车" autocomplete="off">
+          <button class="lb-btn" id="bili-go">解析</button>
+        </div>
+        <div id="bili-card"></div>
+        <div class="sec" style="margin-top:22px;">音乐区推荐<button class="lb-btn lb-ghost sec-act" id="bili-rec-more">换一批</button></div>
+        <div id="bili-rec"><div class="empty">进入页面后加载</div></div>
+      </section>
+
+      <!-- B 站 · 榜单 -->
+      <section class="view" data-page="bili-rank">
+        <div class="bili-head-slot"></div>
+        <div class="sec" style="margin-top:6px;">音乐区排行榜</div>
+        <div id="bili-rank"><div class="empty">进入页面后加载</div></div>
+        <details class="bili-manual">
+          <summary>扫码不行？手动填写 SESSDATA</summary>
+          <div class="bili-manual-row">
+            <input id="bili-sess" class="search-box" type="password" placeholder="粘贴 SESSDATA 的值，或整段 Cookie" autocomplete="off">
+            <button class="lb-btn" id="bili-sess-save">保存</button>
+          </div>
+          <div class="bili-manual-note" id="bili-sess-note">只保存在本机，用系统加密存储；不会显示或上传。</div>
+        </details>
+      </section>
+
+      <!-- B 站详情：只从行内进入，不增加侧栏入口 -->
+      <section class="view" data-page="bili-user">
+        <button class="lb-btn bili-detail-back">‹ 返回</button>
+        <div class="bili-detail-head" id="bili-user-head"></div>
+        <div id="bili-user-list"></div>
+        <div class="bili-detail-foot"><span id="bili-user-note"></span>
+          <button class="lb-btn" id="bili-user-more">加载更多</button></div>
+      </section>
+      <section class="view" data-page="bili-season">
+        <button class="lb-btn bili-detail-back">‹ 返回</button>
+        <div class="bili-detail-head" id="bili-season-head"></div>
+        <div id="bili-season-list"></div>
       </section>
 
       <!-- 歌单 / 本地 占位 -->
@@ -276,6 +331,17 @@
   </div>
 </div>
 
+<!-- B 站扫码登录（沿用网易云弹窗的样式） -->
+<div class="qr-modal" id="bili-qr-modal" hidden>
+  <div class="qr-box">
+    <button class="qr-close" id="bili-qr-close" aria-label="关闭">×</button>
+    <div class="qr-t">扫码登录 B 站</div>
+    <div class="qr-img" id="bili-qr-img"><div class="qr-ph">加载中…</div></div>
+    <div class="qr-s" id="bili-qr-s">正在获取二维码…</div>
+    <div class="qr-hint">用 B 站 App 扫码确认 · 大会员解锁 Hi-Res</div>
+  </div>
+</div>
+
 <div class="queue-panel" id="queue-panel">
   <div class="qp-head">
     <button class="qp-tab on" data-qt="queue">当前播放</button>
@@ -289,5 +355,7 @@
 <script src="js/logo.js"></script>
 <script src="js/api.js"></script>
 <script src="js/app.js"></script>
+<script src="js/title-clean.js"></script>
+<script src="js/bili.js"></script>
 </body>
 </html>

@@ -197,6 +197,22 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;}
 .search-tabs button.on{color:var(--gold);}
 .search-tabs button.on::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:1.5px;
   background:var(--gold);box-shadow:0 0 8px rgba(201,162,39,.5);}
+.search-tabs[hidden]{display:none;}
+
+/* 搜索来源：全部 / 网易云 / B 站（子 tab 在下面一排） */
+.src-tabs{display:flex;gap:6px;margin-top:16px;}
+.src-tabs button{background:var(--panel2);border:1px solid var(--line);color:var(--dim);cursor:pointer;
+  padding:5px 14px;font-size:11.5px;letter-spacing:1.2px;border-radius:2px;transition:color .15s,border-color .15s;}
+.src-tabs button:hover{color:var(--gold);}
+.src-tabs button.on{color:var(--gold);border-color:var(--gold-d);background:rgba(201,162,39,.08);}
+.src-tabs + .search-tabs{margin-top:12px;}
+
+/* 混排结果里的来源标签：网易云金，B 站灰，不另起配色 */
+.src-tag{flex:none;font-size:9px;letter-spacing:1.2px;padding:2px 6px;color:var(--gold-d);border:1px solid #3a3420;}
+.src-tag.bili{color:var(--dim);border-color:var(--line);}
+.src-err{padding:14px 10px;font-size:11.5px;color:#c07070;letter-spacing:.6px;border-bottom:1px solid var(--line2);}
+.sc-card.is-up{cursor:default;}
+.sc-card.is-up:hover .sc-cover{transform:none;}
 
 /* 搜索里的歌手/专辑/歌单卡片 */
 .sc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:22px;padding:20px 0;}
@@ -523,7 +539,9 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;}
 .pl-info .wmark{position:absolute;right:-18px;top:44px;width:300px;height:300px;opacity:.045;pointer-events:none;z-index:0;}
 .pl-info > *:not(.wmark){position:relative;z-index:1;}
 .pl-h1{font-family:"Songti SC","SimSun",Georgia,serif;font-size:52px;font-weight:700;
-  letter-spacing:5px;color:#fff;line-height:1.1;text-shadow:0 2px 24px rgba(0,0,0,.9);}
+  letter-spacing:5px;color:#fff;line-height:1.1;text-shadow:0 2px 24px rgba(0,0,0,.9);
+  /* 最多两行：B 站长标题不再把歌词区挤出视口 */
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;}
 .pl-like{margin-top:20px;}
 
 /* ── 拟物钮子开关：金属法兰 + 钻孔 + 一根真拨杆 ── */
@@ -588,6 +606,9 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;}
 .lyr{font-size:14px;line-height:2.15;color:#43434a;letter-spacing:1px;max-height:210px;overflow-y:auto;scrollbar-width:none;}
 .lyr::-webkit-scrollbar{width:0;height:0;}
 .lyr div{transition:color .2s;}
+.lyr div[data-li]{cursor:pointer;}
+.lyr div[data-li]:not(.cur):hover{color:var(--dim);}
+.lyr div[data-li]:not(.cur):hover .ly-trans{color:var(--dim);}
 .lyr .cur{color:var(--gold-l);font-size:16.5px;letter-spacing:1.4px;text-shadow:0 0 22px rgba(201,162,39,.28);}
 
 /* 歌词注音（粤拼）与译文：挂在每行下面，用 em 跟随当前行的放大 */
@@ -709,3 +730,49 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;}
 .toast-btn:hover{color:var(--gold-l);border-color:var(--gold);}
 .toast-btn.sub{color:var(--dim);border-color:var(--line);}
 .toast-btn.sub:hover{color:var(--text);border-color:var(--line2);}
+
+/* ───────── B 站音源 ───────── */
+.bili-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;}
+.bili-acct{display:flex;align-items:center;gap:10px;margin-top:8px;}
+.bili-state{font-size:11px;letter-spacing:1.2px;color:var(--dim2);}
+.bili-state.on{color:var(--gold);}
+.bili-search{display:flex;gap:10px;align-items:center;margin-bottom:16px;}
+.bili-search .search-box{width:420px;color:var(--text);}
+/* 窄按钮在 flex 行里会被压成竖排，固定不收缩 */
+.bili-search .lb-btn,.bili-acct .lb-btn,.bili-manual-row .lb-btn{flex:none;white-space:nowrap;}
+
+.bili-card{display:flex;align-items:center;gap:18px;border:1px solid var(--gold-d);padding:14px 16px;
+  background:rgba(201,162,39,.035);}
+.bc-cover{width:128px;height:80px;flex:none;background:#161619 center/cover no-repeat;border:1px solid var(--line);}
+.bc-body{flex:1;min-width:0;}
+.bc-t{font-size:14px;color:#e8e8ec;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.bc-a{font-size:11px;color:var(--dim2);margin-top:6px;letter-spacing:.4px;}
+.bili-pages{margin-top:8px;max-width:100%;background:var(--panel);color:#b8b8be;border:1px solid var(--line);
+  font-size:11px;padding:4px 6px;}
+.bili-pages:focus{outline:none;border-color:var(--gold-d);}
+.bc-play{flex:none;color:var(--gold);border-color:var(--gold-d);}
+
+.sec .sec-act{order:1;font-size:10.5px;padding:3px 10px;letter-spacing:1px;}
+
+.br-cover{width:64px;height:40px;flex:none;background:#161619 center/cover no-repeat;border:1px solid var(--line2);}
+.res-badge.hires{color:var(--gold-l);border-color:var(--gold);background:rgba(201,162,39,.10);}
+
+.bili-manual{margin-top:26px;font-size:11px;color:var(--dim2);}
+.bili-manual summary{cursor:pointer;letter-spacing:1.2px;}
+.bili-manual summary:hover{color:var(--dim);}
+.bili-manual-row{display:flex;gap:10px;align-items:center;margin-top:12px;}
+.bili-manual-row .search-box{color:var(--text);}
+.bili-manual-note{margin-top:8px;font-size:10.5px;color:#4e4e54;letter-spacing:.6px;}
+/* B 站 UP 主与合集详情 */
+.bili-up-link { background:none; border:0; padding:0; color:inherit; font:inherit; cursor:pointer; text-align:left; }
+.bili-up-link:hover { color:var(--accent, #bba677); text-decoration:underline; }
+.bili-up-link:focus-visible, .bili-season-link:focus-visible { outline:1px solid currentColor; outline-offset:3px; }
+.bili-season-link { border:1px solid #57503f; border-radius:4px; background:transparent; color:#c5b07c; font-size:10px; padding:2px 6px; cursor:pointer; white-space:nowrap; }
+[data-season-slot] { display:inline-flex; min-width:1px; min-height:20px; align-items:center; }
+.bili-detail-head { display:flex; align-items:center; gap:22px; margin:24px 0; }
+.bili-detail-head img { width:104px; height:104px; border-radius:8px; object-fit:cover; }
+.bili-detail-head img.round { border-radius:50%; }
+.bili-detail-head .page-t { font-size:26px; overflow-wrap:anywhere; }
+.bili-detail-head .page-sub { margin-top:10px; }
+.bili-detail-foot { display:flex; align-items:center; justify-content:center; gap:16px; margin:24px 0; color:#999; font-size:12px; }
+.is-up[data-bili-mid] { cursor:pointer; }

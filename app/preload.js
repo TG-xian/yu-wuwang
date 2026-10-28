@@ -20,5 +20,23 @@ contextBridge.exposeInMainWorld('yw', {
     try { return webUtils.getPathForFile(file) || ''; } catch { return ''; }
   },
   onTrayCmd: (cb) => ipcRenderer.on('tray-cmd', (_e, cmd) => cb(cmd)),
+  /** B 站音源：统一返回 { ok, data } / { ok:false, error } */
+  bili: {
+    userVideos: (q) => ipcRenderer.invoke('bili:user-videos', q),
+    userProfile: (q) => ipcRenderer.invoke('bili:user-profile', q),
+    season: (q) => ipcRenderer.invoke('bili:season', q),
+    ranking: () => ipcRenderer.invoke('bili:ranking'),
+    recommend: (q) => ipcRenderer.invoke('bili:recommend', q),
+    searchVideo: (q) => ipcRenderer.invoke('bili:search-video', q),
+    searchUser: (q) => ipcRenderer.invoke('bili:search-user', q),
+    info: (input) => ipcRenderer.invoke('bili:info', input),
+    playurl: (q) => ipcRenderer.invoke('bili:playurl', q),
+    lyrics: (q) => ipcRenderer.invoke('bili:lyrics', q),
+    qrGenerate: () => ipcRenderer.invoke('bili:qr-generate'),
+    qrPoll: (key) => ipcRenderer.invoke('bili:qr-poll', key),
+    sessionGet: () => ipcRenderer.invoke('bili:session-get'),
+    sessionSave: (text) => ipcRenderer.invoke('bili:session-save', text),
+    sessionClear: () => ipcRenderer.invoke('bili:session-clear'),
+  },
   enginePort: 47800
 });

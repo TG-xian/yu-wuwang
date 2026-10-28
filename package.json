@@ -17,6 +17,7 @@
   "dependencies": {
     "koffi": "^3.3.3",
     "NeteaseCloudMusicApi": "^4.32.0",
+    "qrcode": "^1.5.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {

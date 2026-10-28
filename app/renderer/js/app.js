@@ -58,6 +58,10 @@ const state = {
   searchData: null,
   searchTab: 'songs',
   searchKeyword: '',
+  searchSrc: 'all',     // 来源 tab：all | ne | bili
+  biliTab: 'video',     // B 站子 tab：video | user
+  biliSearch: null,
+  neErr: '',
   viewStack: [],     // 视图返回栈
   homePls: [],       // 推荐歌单全量
   homeShown: 0,      // 已渲染数量
@@ -153,7 +157,9 @@ function connectEngine() {
         } else {
           const f = m.info || {};
           state.outFallbackDone = false;
-          $('#pl-tag').textContent = `SQ LOSSLESS · ${(f.freq / 1000).toFixed(1)} kHz / ${f.bits} bit`;
+          const cur = state.current;
+          const tagHead = cur && cur.bili ? `B 站 · ${cur.qLabel || '—'}` : 'SQ LOSSLESS';
+          $('#pl-tag').textContent = `${tagHead} · ${(f.freq / 1000).toFixed(1)} kHz / ${f.bits} bit`;
           if (IS_MAC) {
             // 界面只说人话；err 码只在 console 里（引擎已打）
             const dn = m.deviceName || outDevName(m.device);
@@ -313,43 +319,79 @@ async function loadLyric(id) {
     const { lrc, tlyric, romalrc } = await api.lyric(id);
     // 连点切歌时，先发的歌词可能后到 —— 只认当前这首的
     if (!state.current || state.current.id !== id) return;
-    const lines = api.parseLrc(lrc);
-
-    // ① 译文：按时间戳 ±0.3s 对齐（两轨行数常常不等，不能按序硬配）
-    const trans = api.parseLrc(tlyric);
-    if (trans.length) {
-      let ti = 0;
-      let hit = 0;
-      for (const l of lines) {
-        while (ti < trans.length && trans[ti].t < l.t - 0.3) ti++;
-        if (ti < trans.length && Math.abs(trans[ti].t - l.t) <= 0.3) {
-          const txt = (trans[ti].text || '').trim();
-          if (txt) { l.trans = txt; hit++; }
-        }
-      }
-      if (hit) console.log(`[lyric] 译文对齐 ${hit}/${lines.length} 行`);
-    }
-
-    // ② 注音：直接用网易云的 romalrc 轨（粤语=粤拼 / 日语=罗马音）
-    const roma = api.parseLrc(romalrc);
-    if (roma.length) {
-      let ri = 0;
-      let hit = 0;
-      for (const l of lines) {
-        while (ri < roma.length && roma[ri].t < l.t - 0.35) ri++;
-        if (ri < roma.length && Math.abs(roma[ri].t - l.t) <= 0.35) {
-          const txt = (roma[ri].text || '').trim();
-          if (txt) { l.jp = txt; hit++; }
-        }
-      }
-      if (hit) console.log(`[lyric] 注音对齐 ${hit}/${lines.length} 行`);
-    }
-
+    const lines = buildLyricLines(lrc, tlyric, romalrc);
     state.lyric = lines;
     if (lines.length) renderLyric(lines);
   } catch (e) {
     console.warn('[lyric]', e.message);
   }
+}
+
+/** 网易云三轨 → [{ t, text, trans?, jp? }]；B 站匹配到的网易云歌词也走这里 */
+function buildLyricLines(lrc, tlyric, romalrc) {
+  const lines = api.parseLrc(lrc);
+
+  // ① 译文：按时间戳 ±0.3s 对齐（两轨行数常常不等，不能按序硬配）
+  const trans = api.parseLrc(tlyric);
+  if (trans.length) {
+    let ti = 0;
+    let hit = 0;
+    for (const l of lines) {
+      while (ti < trans.length && trans[ti].t < l.t - 0.3) ti++;
+      if (ti < trans.length && Math.abs(trans[ti].t - l.t) <= 0.3) {
+        const txt = (trans[ti].text || '').trim();
+        if (txt) { l.trans = txt; hit++; }
+      }
+    }
+    if (hit) console.log(`[lyric] 译文对齐 ${hit}/${lines.length} 行`);
+  }
+
+  // ② 注音：直接用网易云的 romalrc 轨（粤语=粤拼 / 日语=罗马音）
+  const roma = api.parseLrc(romalrc);
+  if (roma.length) {
+    let ri = 0;
+    let hit = 0;
+    for (const l of lines) {
+      while (ri < roma.length && roma[ri].t < l.t - 0.35) ri++;
+      if (ri < roma.length && Math.abs(roma[ri].t - l.t) <= 0.35) {
+        const txt = (roma[ri].text || '').trim();
+        if (txt) { l.jp = txt; hit++; }
+      }
+    }
+    if (hit) console.log(`[lyric] 注音对齐 ${hit}/${lines.length} 行`);
+  }
+
+  return lines;
+}
+
+/** B 站音源：主进程按标题 / UP 主 / 时长去网易云 + LRCLIB 匹配；匹配不到只给提示，不弹窗 */
+async function loadLyricBili(track) {
+  const box = $('#pl-lyric');
+  box.innerHTML = '<div>— 歌词匹配中… —</div>';
+  let r = null;
+  try {
+    r = await window.YW.bili.lyrics(track);
+  } catch (e) {
+    console.warn('[lyric] B 站歌词匹配出错:', e.message);
+  }
+  if (state.current !== track) return;   // 匹配期间切了歌
+  if (!r || !r.ok) {
+    if (r) console.log(`[lyric] B 站未匹配: ${r.reason}`);
+    box.innerHTML = '<div>— 暂无歌词 —</div>';
+    return;
+  }
+  console.log(`[lyric] B 站匹配 ${r.source}「${r.songTitle}」${r.songArtist} 分数=${r.score}${r.fromCache ? ' (缓存)' : ''}`);
+
+  if (r.synced) {
+    const lines = buildLyricLines(r.lrc, r.tlyric, r.romalrc);
+    state.lyric = lines;
+    state.lyricIdx = -1;
+    if (lines.length) { renderLyric(lines); updateLyric(state.pos); return; }
+  }
+  // 只有纯文本：照样显示，但不进 state.lyric（没有时间轴，不跟随、不能点跳）
+  const plain = String(r.lrc || '').split(/\r?\n/).map((s) => s.replace(/\[[^\]]*\]/g, '').trim()).filter(Boolean);
+  if (!plain.length) { box.innerHTML = '<div>— 暂无歌词 —</div>'; return; }
+  box.innerHTML = plain.map((s) => `<div><span class="ly-main">${esc(s)}</span></div>`).join('');
 }
 
 function renderLyric(lines) {
@@ -487,7 +529,8 @@ function normalize(song) {
   };
 }
 
-function rowHtml(t, i, key) {
+/** tag：融合搜索里的来源标签 HTML，其他列表不传 */
+function rowHtml(t, i, key, tag = '') {
   return `
     <div class="res-row" data-key="${esc(key)}">
       <span class="res-idx">${String(i + 1).padStart(2, '0')}</span>
@@ -495,6 +538,7 @@ function rowHtml(t, i, key) {
         <div class="res-t">${esc(t.t)}</div>
         <div class="res-a">${esc(t.a)}${t.al ? ' — ' + esc(t.al) : ''}</div>
       </div>
+      ${tag}
       <button class="like-btn ${state.liked.has(t.id) ? 'on' : ''}" data-like="${t.id}" aria-label="喜欢">
         <svg viewBox="0 0 24 24"><path d="M12 20.4S4.6 15.7 2.7 11.4C1.3 8.2 3.2 5.1 6.5 5.1c1.9 0 3.3 1 4.1 2.2h2.8c.8-1.2 2.2-2.2 4.1-2.2 3.3 0 5.2 3.1 3.8 6.3C19.4 15.7 12 20.4 12 20.4z"/></svg>
       </button>
@@ -530,26 +574,185 @@ function renderTracks(list, keyword, subText) {
   renderList('search-list', list, subText || `「${keyword}」· ${list.length} 条`, 'search-sub');
 }
 
+/* ── 融合搜索：来源 tab（全部 / 网易云 / B 站）→ 各自的子 tab ──
+   两个源各管各的：网易云结果在 state.searchData / state.neErr，
+   B 站在 state.biliSearch（null = 还没回来）。哪个源回来就重画一次当前 tab。 */
+let searchSeq = 0;   // 搜索代次：换词后旧请求的结果直接丢弃
+
+const SRC_TAG = {
+  ne: '<span class="src-tag">网易云</span>',
+  bili: '<span class="src-tag bili">B 站</span>',
+};
+
 async function doSearch(keyword) {
   switchView('search');
+  const my = ++searchSeq;
   state.searchKeyword = keyword;
+  state.searchData = null;
+  state.neErr = '';
+  state.biliSearch = { kw: keyword, video: null, user: null, videoErr: '', userErr: '', busy: {} };
   $('#search-sub').textContent = `搜索「${keyword}」…`;
-  $('#search-list').innerHTML = '<div class="empty">搜索中…</div>';
+  renderSearch();
+
+  const ne = (async () => {
+    try {
+      const r = await api.search(keyword, 1, 30);
+      if (my !== searchSeq) return;
+      state.searchData = {
+        songs: r.songs.map(normalize),
+        artists: r.artists || [],
+        albums: r.albums || [],
+        playlists: r.playlists || [],
+        total: r.total || 0,
+      };
+      // 停在网易云的其他子 tab 时，新关键词要补拉那类
+      if (state.searchSrc === 'ne' && state.searchTab !== 'songs') await fetchSearchTab(state.searchTab);
+    } catch (e) {
+      if (my === searchSeq) state.neErr = e.message;
+    }
+    if (my === searchSeq) renderSearch();
+  })();
+
+  // 「全部」要用 B 站曲目，所以曲目总是跟着搜；UP 主只在停在那个 tab 时才拉
+  const jobs = [ne, fetchBili('video')];
+  if (state.searchSrc === 'bili' && state.biliTab === 'user') jobs.push(fetchBili('user'));
+  await Promise.all(jobs);
+}
+
+/** 拉 B 站的一类结果；失败只记在自己身上，不影响网易云那块 */
+async function fetchBili(kind) {
+  const b = state.biliSearch;
+  if (!b || b.busy[kind]) return;
+  b.busy[kind] = true;
+  b[kind] = null;
+  b[`${kind}Err`] = '';
   try {
-    const r = await api.search(keyword, 1, 30);
-    state.searchData = {
-      songs: r.songs.map(normalize),
-      artists: r.artists || [],
-      albums: r.albums || [],
-      playlists: r.playlists || [],
-      total: r.total || 0,
-    };
-    // 停在其他 tab 时，新关键词要补拉那类
-    if (state.searchTab !== 'songs') await fetchSearchTab(state.searchTab);
-    renderSearchTab();
+    if (!window.YW.bili) throw new Error('B 站模块未加载');
+    const fn = kind === 'video' ? window.YW.bili.searchVideo : window.YW.bili.searchUser;
+    b[kind] = await fn(b.kw);
   } catch (e) {
-    $('#search-list').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    b[`${kind}Err`] = e.message;
+    console.warn(`[search] B 站 ${kind} 失败:`, e.message);
+  } finally {
+    b.busy[kind] = false;
   }
+  if (state.biliSearch === b) renderSearch();   // 期间换了词：旧结果不画
+}
+
+/** 切到某个 B 站 tab 时：没数据（没拉过或上次失败）且不在拉 → 补拉 */
+function ensureBili(kind) {
+  const b = state.biliSearch;
+  if (b && b[kind] === null && !b.busy[kind]) fetchBili(kind);
+}
+
+/** 当前来源 tab 的总入口 */
+function renderSearch() {
+  const src = state.searchSrc;
+  $$('#search-src button').forEach((b) => b.classList.toggle('on', b.dataset.src === src));
+  $('#search-tabs').hidden = src !== 'ne';
+  $('#bili-search-tabs').hidden = src !== 'bili';
+  if (!state.searchKeyword) return;   // 还没搜过：保留引导文案
+  if (src === 'ne') renderNeSearch();
+  else if (src === 'bili') renderBiliSearch();
+  else renderSearchAll();
+}
+
+function renderNeSearch() {
+  if (state.neErr) {
+    $('#search-list').innerHTML = `<div class="empty">网易云搜索失败：${esc(state.neErr)}</div>`;
+    $('#search-sub').textContent = `「${state.searchKeyword}」`;
+  } else if (!state.searchData) {
+    $('#search-list').innerHTML = '<div class="empty">搜索中…</div>';
+  } else {
+    renderSearchTab();
+  }
+}
+
+/** 网易云 + B 站曲目混在一张表里；当前列表即播放队列，两种曲目 playTrack 都认 */
+function renderMixedRows(list) {
+  state.rows = state.rows || new Map();
+  state.queue = list;
+  state.qi = -1;
+  return list.map((t, i) => {
+    const key = String(t.id);
+    state.rows.set(key, t);
+    return t.bili
+      ? window.YW.bili.rowHtml(t, i, `data-key="${esc(key)}"`, SRC_TAG.bili)
+      : rowHtml(t, i, key, SRC_TAG.ne);
+  }).join('');
+}
+
+function renderSearchAll() {
+  const kw = state.searchKeyword;
+  const b = state.biliSearch || {};
+  const nePending = !state.searchData && !state.neErr;
+  const biliPending = b.video === null && !b.videoErr;
+  // 等两边都回来再混排，免得先到的那批被后到的插队、行在鼠标下面跳
+  if (nePending || biliPending) {
+    $('#search-list').innerHTML = '<div class="empty">搜索中…</div>';
+    $('#search-sub').textContent = `搜索「${kw}」…`;
+    return;
+  }
+
+  const ne = (state.searchData && state.searchData.songs) || [];
+  const bv = b.video || [];
+  const mixed = [];
+  for (let i = 0; i < Math.max(ne.length, bv.length); i++) {
+    if (ne[i]) mixed.push(ne[i]);
+    if (bv[i]) mixed.push(bv[i]);
+  }
+
+  const errs = [
+    state.neErr ? `<div class="src-err">网易云搜索失败：${esc(state.neErr)}</div>` : '',
+    b.videoErr ? `<div class="src-err">B 站搜索失败：${esc(b.videoErr)}</div>` : '',
+  ].join('');
+  const rows = renderMixedRows(mixed);
+  $('#search-list').innerHTML = errs + (rows || (errs ? '' : '<div class="empty">没有结果</div>'));
+  $('#search-sub').textContent = `「${kw}」· 网易云 ${ne.length} · B 站 ${bv.length}`;
+}
+
+function renderBiliSearch() {
+  const b = state.biliSearch || {};
+  const tab = state.biliTab;
+  const kw = state.searchKeyword;
+  $$('#bili-search-tabs button').forEach((x) => {
+    const t = x.dataset.btab;
+    const n = Array.isArray(b[t]) ? b[t].length : '';
+    x.classList.toggle('on', t === tab);
+    x.textContent = `${t === 'video' ? '曲目' : 'UP 主'} ${n}`.trim();
+  });
+
+  const err = b[`${tab}Err`];
+  const data = b[tab];
+  if (err) {
+    $('#search-list').innerHTML = `<div class="empty">B 站搜索失败：${esc(err)}<br>
+      <span style="color:#5a5a5e;font-size:11px">再点一次当前 tab 重试</span></div>`;
+    $('#search-sub').textContent = `「${kw}」`;
+    return;
+  }
+  if (data === null) {
+    $('#search-list').innerHTML = '<div class="empty">搜索中…</div>';
+    return;
+  }
+  if (!data.length) {
+    $('#search-list').innerHTML = '<div class="empty">这一类没有结果</div>';
+    $('#search-sub').textContent = `「${kw}」· 0 个结果`;
+    return;
+  }
+
+  if (tab === 'video') {
+    $('#search-list').innerHTML = renderMixedRows(data);
+    $('#search-sub').textContent = `「${kw}」· B 站曲目 ${data.length} 条`;
+    return;
+  }
+  // UP 主卡片交给 B 站模块打开主页。
+  $('#search-list').innerHTML = `<div class="sc-grid">${data.map((u) => `
+    <div class="sc-card is-artist is-up" role="button" tabindex="0" data-bili-mid="${esc(u.mid)}" data-up-name="${esc(u.name)}" data-up-face="${esc(u.face)}" data-up-fans="${esc(u.fans)}">
+      <div class="sc-cover" style="background-image:url('${esc(window.YW.bili.thumb(u.face, 200, 200))}')"></div>
+      <div class="sc-name">${esc(u.name)}</div>
+      <div class="sc-sub">${fmtCount(u.fans)} 粉丝 · ${u.videos} 投稿</div>
+    </div>`).join('')}</div>`;
+  $('#search-sub').textContent = `「${kw}」· UP 主 ${data.length} 个`;
 }
 
 /** 按当前 tab 渲染搜索结果 */
@@ -664,6 +867,35 @@ async function playTrack(track) {
     return true;
   }
 
+  // B 站：不依赖网易云登录；主进程先把音频下到本地缓存，source 是本地路径
+  if (track.bili) {
+    setStatus('B 站缓冲中…');
+    state.lyric = [];
+    state.lyricIdx = -1;
+    $('#pl-lyric').innerHTML = '<div>—</div>';
+    let p;
+    try {
+      p = await window.YW.bili.resolve(track);
+    } catch (e) {
+      console.warn(`[play] B 站取流失败 ${track.bili.bvid}: ${e.message}`);
+      setStatus('取流失败: ' + e.message);
+      done();
+      return false;
+    }
+    if (mySeq !== playSeq) return false;
+    const q = $('#pb-q');
+    q.textContent = track.qLabel;
+    q.classList.remove('bad', 'warn');
+    q.title = `B 站 ${track.qLabel}（${p.qualityId}）`;
+    if (!sendLoad({ source: p.source, trackId: track.id })) {
+      setStatus('引擎未连接'); done(); return false;
+    }
+    console.log(`[play] load 已发 ${track.bili.bvid} 「${track.t}」 ${p.qualityId}`);
+    loadLyricBili(track);
+    pushRecent(track);
+    return true;
+  }
+
   if (!state.loggedIn) { setStatus('未登录：无法取流'); done(); return false; }
   setStatus('取流中…');
 
@@ -753,6 +985,7 @@ function setCurrent(track) {
   syncLikeUI(track.id);
   updateMediaSession(track);
   $('#pl-title').textContent = track.t;
+  $('#pl-title').title = track.tRaw || track.t || '';   // B 站标题清洗过，悬停看原文
   $('#pl-meta').innerHTML =
     `<span class="lnk" data-artist="${track.artistId || ''}">${esc(track.a)}</span><span class="dot">·</span>` +
     `<span class="lnk" data-album="${track.albumId || ''}">《${esc(track.al)}》</span>`;
@@ -760,6 +993,7 @@ function setCurrent(track) {
 
 /* ────────── 喜欢（扁平心形 + 拟物开关共用一套状态） ────────── */
 async function toggleLike(id) {
+  if (typeof id === 'string' && id.startsWith('bili:')) { setStatus('B 站曲目暂不支持喜欢'); return; }
   if (!id || !state.loggedIn) { setStatus('需要登录才能喜欢'); return; }
   const next = !state.liked.has(id);
   try {
@@ -882,6 +1116,15 @@ function switchView(name, { push = true } = {}) {
 
   if (name === 'home') { $('[data-page="home"]').classList.add('on'); return; }
   if (name === 'search') { $('[data-page="search"]').classList.add('on'); return; }
+  if (name === 'bili-user' || name === 'bili-season') {
+    $(`[data-page="${name}"]`).classList.add('on');
+    return;
+  }
+  if (name === 'bili-recommend' || name === 'bili-rank') {
+    $(`[data-page="${name}"]`).classList.add('on');
+    if (window.YW.bili) window.YW.bili.onShow(name);
+    return;
+  }
 
   $('[data-page="list"]').classList.add('on');
   if (name === 'daily') { showDaily(); return; }
@@ -928,6 +1171,7 @@ function pushRecent(track) {
       id: track.id, path: track.path || null,
       t: track.t, a: track.a, al: track.al,
       cover: track.cover || '', dur: track.dur || 0, sq: track.sq,
+      bili: track.bili || undefined,   // 从「最近播放」重放 B 站曲目要靠它重新取流
       at: Date.now(),
     });
     if (list.length > 100) list.length = 100;
@@ -1498,6 +1742,33 @@ $('#search-tabs').addEventListener('click', async (e) => {
   renderSearchTab();
 });
 
+$('#search-src').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-src]');
+  if (!b) return;
+  state.searchSrc = b.dataset.src;
+  const kw = (($('#q') && $('#q').value) || '').trim();
+  // 搜索框里换了词还没回车：按新词搜（和网易云子 tab 的行为一致）
+  if (kw && kw !== state.searchKeyword) { doSearch(kw); return; }
+
+  if (state.searchSrc === 'ne' && state.searchData && state.searchTab !== 'songs'
+      && !state.searchData[state.searchTab].length) {
+    await fetchSearchTab(state.searchTab);
+  }
+  if (state.searchSrc === 'bili') ensureBili(state.biliTab);
+  if (state.searchSrc === 'all') ensureBili('video');
+  renderSearch();
+});
+
+$('#bili-search-tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-btab]');
+  if (!b) return;
+  state.biliTab = b.dataset.btab;
+  const kw = (($('#q') && $('#q').value) || '').trim();
+  if (kw && kw !== state.searchKeyword) { doSearch(kw); return; }
+  ensureBili(state.biliTab);   // 没拉过 / 上次失败 → 补拉
+  renderSearch();
+});
+
 /** 按类型补拉搜索结果：artists→100 / albums→10 / playlists→1000 */
 async function fetchSearchTab(tab) {
   const typeMap = { artists: 100, albums: 10, playlists: 1000 };
@@ -2042,6 +2313,24 @@ $('#pl-groove').addEventListener('click', (e) => {
   engSend({ cmd: 'seek', seconds: p * state.dur });
 });
 
+/* 点歌词跳到该句：网易云 / 本地 / B 站共用，只认 state.lyric 里有时间轴的行 */
+$('#pl-lyric').addEventListener('click', (e) => {
+  const row = e.target.closest('[data-li]');
+  if (!row || seekState.dragging || !state.current || !state.dur) return;
+  const line = state.lyric[Number(row.dataset.li)];
+  if (!line || !(line.t >= 0)) return;
+  // 多跳 20ms：引擎回报的位置略早于目标时，高亮不会闪回上一句
+  const seconds = Math.min(state.dur, line.t + 0.02);
+  engSend({ cmd: 'seek', seconds });
+  state.pos = seconds;
+  const pct = Math.min(100, (seconds / state.dur) * 100) + '%';
+  $('#pl-groove i').style.width = pct;
+  $('#pb-bar i').style.width = pct;
+  $('#pl-pos').textContent = fmt(seconds);
+  $('#pb-time').textContent = `${fmt(seconds)} / ${fmt(state.dur)}`;
+  updateLyric(seconds);
+});
+
 /* ────────── 启动 ────────── */
 /* ────────── 直链自愈：卡住就重取 ────────── */
 /**
@@ -2088,10 +2377,17 @@ async function healCurrent(atPos) {
   const t = state.current;
   if (!t || !t.id) return;
   try {
-    const u = await api.songUrl(t.id, 'lossless');
-    if (!u.url) { console.warn('[heal] 重取无直链'); return; }
+    let source;
+    if (t.bili) {
+      // B 站直链过期同样表现为卡住；force 跳过缓存，免得拿回同一条死链
+      source = (await window.YW.bili.resolve(t, { force: true })).source;
+    } else {
+      const u = await api.songUrl(t.id, 'lossless');
+      if (!u.url) { console.warn('[heal] 重取无直链'); return; }
+      source = u.url;
+    }
 
-    sendLoad({ source: u.url, trackId: t.id });
+    sendLoad({ source, trackId: t.id });
 
     // load 完成后跳回原位置（给引擎留出建流 + 启动时间）
     setTimeout(() => {
