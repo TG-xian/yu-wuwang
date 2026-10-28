@@ -62,6 +62,20 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
 
+      # 手动触发时（非 tag），直接把 dmg 挂到同名 Release 上，避免 110MB 经本地网络中转
+      - name: 附加到 Release（仅 workflow_dispatch）
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(node -p "require('./package.json').version")
+          TAG="v$TAG"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.dmg --clobber --repo "${{ github.repository }}"
+          else
+            echo "Release $TAG 不存在，跳过（产物仍在 artifacts 里）"
+          fi
+
   # ── 汇总 ──
   release:
     needs: [windows, macos]
