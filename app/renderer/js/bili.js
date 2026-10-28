@@ -444,9 +444,10 @@
 
   async function openQr() {
     const my = ++qrToken;
-    const modal = $id('bili-qr-modal');
-    const img = $id('bili-qr-img');
-    const st = $id('bili-qr-s');
+    // 与网易云共用同一个登录面板，元素是共享的
+    const modal = $id('qr-modal');
+    const img = $id('qr-img');
+    const st = $id('qr-s');
     modal.hidden = false;
     img.innerHTML = '<div class="qr-ph">加载中…</div>';
     st.textContent = '正在获取二维码…';
@@ -490,7 +491,7 @@
 
   function closeQr() {
     qrToken++;
-    $id('bili-qr-modal').hidden = true;
+    $id('qr-modal').hidden = true;
   }
 
   async function saveManual() {
@@ -519,8 +520,7 @@
   $id('bili-go').addEventListener('click', lookup);
   $id('bili-login').addEventListener('click', openQr);
   $id('bili-logout').addEventListener('click', logout);
-  $id('bili-qr-close').addEventListener('click', closeQr);
-  $id('bili-qr-modal').addEventListener('click', (e) => { if (e.target.id === 'bili-qr-modal') closeQr(); });
+  // 关闭按钮与遮罩点击统一由 app.js 的共用面板处理，这里只导出开/关函数
   $id('bili-sess-save').addEventListener('click', saveManual);
   $id('bili-rec-more').addEventListener('click', loadRecommend);
 
@@ -533,5 +533,5 @@
   }
 
   window.YW = window.YW || {};
-  window.YW.bili = { onShow, resolve, lyrics, play, rowHtml, searchVideo, searchUser, thumb, QUALITY_LABEL };
+  window.YW.bili = { onShow, resolve, lyrics, play, rowHtml, searchVideo, searchUser, thumb, QUALITY_LABEL, openQrLogin: openQr, closeQrLogin: closeQr };
 })();

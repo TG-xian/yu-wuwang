@@ -2556,7 +2556,34 @@ if (window.yw && window.yw.onWinMaxed) {
 /* ────────── 扫码登录 ────────── */
 let qrPolling = false;
 
-async function openQrLogin() {
+let qrTab = 'ne';
+
+/** 统一登录面板：一个入口，面板内分「网易云 / B 站」两个 tab */
+function openQrLogin(tab) {
+  $('#qr-modal').hidden = false;
+  const needNe = ['未登录', '登录失效', '服务未启动'].includes($('#user').textContent);
+  // B 站登录成功后会把「扫码登录」按钮隐藏起来，用这个反推它的登录状态
+  const biliBtn = document.getElementById('bili-login');
+  const needBili = !!(biliBtn && !biliBtn.hidden);
+  // 优先跳到还没登录的那个源；两个都登录了就默认第一个 tab
+  setQrTab(tab || (needNe ? 'ne' : (needBili ? 'bili' : 'ne')));
+}
+
+function setQrTab(tab) {
+  qrTab = tab;
+  document.querySelectorAll('.qr-tab').forEach((b) => b.classList.toggle('on', b.dataset.qr === tab));
+  $('#qr-hint').textContent = tab === 'bili'
+    ? '用 B 站 App 扫码确认 · 大会员解锁 Hi-Res'
+    : '用「网易云音乐」App 扫码并确认';
+  if (tab === 'bili') {
+    if (window.YW && window.YW.bili) window.YW.bili.openQrLogin();
+  } else {
+    if (window.YW && window.YW.bili) window.YW.bili.closeQrLogin();
+    startNeteaseQr();
+  }
+}
+
+async function startNeteaseQr() {
   const modal = $('#qr-modal');
   modal.hidden = false;
   $('#qr-img').innerHTML = '<div class="qr-ph">加载中…</div>';
@@ -2659,9 +2686,16 @@ async function afterLogin() {
 $('#user').addEventListener('click', () => {
   openQrLogin();
 });
-$('#qr-close').addEventListener('click', () => { $('#qr-modal').hidden = true; });
+document.querySelectorAll('.qr-tab').forEach((b) => {
+  b.addEventListener('click', () => setQrTab(b.dataset.qr));
+});
+function closeLoginPanel() {
+  $('#qr-modal').hidden = true;
+  if (window.YW && window.YW.bili) window.YW.bili.closeQrLogin();
+}
+$('#qr-close').addEventListener('click', closeLoginPanel);
 $('#qr-modal').addEventListener('click', (e) => {
-  if (e.target.id === 'qr-modal') $('#qr-modal').hidden = true;
+  if (e.target.id === 'qr-modal') closeLoginPanel();
 });
 
 /* ────────── 托盘菜单命令 ────────── */
