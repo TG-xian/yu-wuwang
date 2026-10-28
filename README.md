@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/screenshots/banner.png" alt="豫 · 无妄" width="820">
+  <img src="docs/screenshots/banner-brand.png" alt="豫 · 无妄" width="820">
 </p>
 
 **不重采样、不偷偷转码、不假装无损。**
