@@ -21,9 +21,7 @@ Iris 是 [Nous Research](https://nousresearch.com/) 构建的 Hermes Agent——
 AI agent：能读写代码、执行命令、跑测试、看渲染截图，也能把活拆给别的 AI 编码代理
 再把产出验收回来。
 
-它由 Hermes Agent 框架驱动，主模型当前是 **DeepSeek V4.1 Flash**（经 opencode 网关接入）。
-模型可以替换——Hermes 支持多家 provider——换掉不会改变它的工作方式，
-只改变它思考的速度和深度。
+它由 Hermes Agent 框架驱动，主模型是 **DeepSeek V4.1 Flash**；模型可换，工作方式不变。
 
 在这个项目里，它负责的部分包括：把需求拆成任务书写进 `docs/`、设计 B 站音源的取流链路
 （`fnval=4048` + `buvid` 三件套 + Referer/UA）、实现双源歌词匹配与标题清洗、
