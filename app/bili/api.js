@@ -587,7 +587,8 @@ async function downloadAudio(bvid, { sessdata = '', cid = 0, page = 1, force = f
 }
 
 /** 先删超龄的，再按总大小从最旧的删；残留 .part 超过 10 分钟一并清掉 */
-function pruneCache({ maxBytes = 800 * 1024 * 1024, maxAgeDays = 7 } = {}) {
+// 2GB：Hi-Res 单首约 84MB，800MB 只装得下约 10 首，对听 Hi-Res 的人不够用
+function pruneCache({ maxBytes = 2048 * 1024 * 1024, maxAgeDays = 7 } = {}) {
   let dir;
   try { dir = cacheDir(); } catch { return { removed: 0, kept: 0, bytes: 0 }; }
   const now = Date.now();
