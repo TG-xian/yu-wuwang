@@ -158,6 +158,10 @@ macOS 版的实现已经完成，但没有在 Mac 上跑过。打包与验证方
 - Windows 会弹「未知发布者」→ 点「更多信息」→「仍要运行」
 - macOS 首次打开要右键「打开」，或执行 `xattr -cr /Applications/YuWuwang.app`
 
+## 反馈
+
+用着不顺手、想加什么功能、遇到 bug，到 [Discussions](../../discussions) 说一句就行。提问题时带上**版本号 + 系统 + 复现步骤**（音频问题再加声卡型号和是否 ASIO 独占），定位起来会快很多。
+
 ## 开发
 
 ```bash
